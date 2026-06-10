@@ -1,0 +1,6 @@
+pywebview>=5.0
+pythonnet>=3.0
+pystray>=0.19
+Pillow>=10.0
+playwright>=1.40
+holidays>=0.40

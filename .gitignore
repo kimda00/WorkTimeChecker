@@ -1,0 +1,21 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller 빌드 산출물 (빌드.bat 로 재생성)
+build/
+dist/
+*.spec
+
+# 개인 데이터 / 로그인 세션 / 회사 주소 — 절대 커밋 금지
+config.json
+data.json
+data.json.tmp
+.ehr_state.json
+.browser_profile/
+
+# 임시 / OS
+_*.png
+*.tmp
+Thumbs.db

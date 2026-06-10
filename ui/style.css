@@ -1,0 +1,241 @@
+:root {
+  color-scheme: dark;
+  --bg: #0e1114;          /* near-black 배경 */
+  --panel: #161a1f;       /* 살짝 떠보이는 패널 */
+  --panel-2: #1c2127;     /* 헤더/입력 강조 */
+  --line: #29313a;        /* 경계선 */
+  --text: #e7ecef;        /* 본문 */
+  --muted: #7d8893;       /* 흐린 글자 */
+  --mint: #3fe0c5;        /* 메인 민트 */
+  --mint-dim: #2bb89f;    /* 어두운 민트 */
+  --mint-deep: #102a25;   /* 민트 딥 배경 */
+  --time: #9fe8d8;        /* 출퇴근 시간 */
+  --work: #3fe0c5;        /* 근무 시간 */
+  --over: #57f0a6;        /* 목표 초과 */
+  --red: #ff6b5e;         /* 주간 초과(연장) */
+  --today: rgba(63, 224, 197, 0.10);
+  --today-line: #3fe0c5;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: "Malgun Gothic", "맑은 고딕", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wrap { padding: 12px 14px 14px; }
+
+/* ---- top bar ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.navbtn {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  width: 30px;
+  height: 28px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background .12s, border-color .12s;
+}
+.navbtn:hover { background: #232a31; border-color: var(--mint-dim); }
+.weeklabel {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  min-width: 150px;
+  text-align: center;
+  color: var(--text);
+}
+.spacer { flex: 1; }
+.ehrbtn {
+  border: 1px solid var(--mint);
+  background: linear-gradient(180deg, #3fe0c5, #2bb89f);
+  color: #04241e;
+  border-radius: 7px;
+  padding: 6px 14px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  box-shadow: 0 0 0 0 rgba(63, 224, 197, .0);
+  transition: box-shadow .15s, filter .12s;
+}
+.ehrbtn:hover { filter: brightness(1.08); box-shadow: 0 0 14px rgba(63, 224, 197, .25); }
+.ehrbtn:disabled { opacity: .5; cursor: default; filter: none; box-shadow: none; }
+
+/* ---- grid ---- */
+table#grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  table-layout: fixed;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+}
+#grid th, #grid td {
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  height: 36px;
+  text-align: center;
+  font-size: 13px;
+  padding: 0;
+}
+#grid tr > *:last-child { border-right: 0; }
+#grid tbody tr:last-child > * { border-bottom: 0; }
+
+#grid thead th {
+  background: var(--panel-2);
+  color: var(--mint);
+  font-weight: 800;
+  letter-spacing: .3px;
+}
+#grid thead th .date {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.rowlabel {
+  background: #12171c;
+  color: var(--muted);
+  font-weight: 700;
+  width: 96px;
+  font-size: 12px;
+}
+#grid thead th.corner {
+  background: #0c1115;
+  width: 96px;
+}
+
+/* today column highlight */
+#grid .today { background: var(--today); }
+#grid thead th.today {
+  background: linear-gradient(180deg, rgba(63, 224, 197, .22), rgba(63, 224, 197, .10));
+  color: var(--mint);
+  box-shadow: inset 0 -2px 0 var(--today-line);
+}
+
+/* cell inputs */
+.cellinput {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--time);
+  font-weight: 600;
+  outline: none;
+  caret-color: var(--mint);
+}
+.cellinput::placeholder { color: #4a555d; }
+.cellinput:focus {
+  background: #0f211d;
+  box-shadow: inset 0 0 0 1.5px var(--mint);
+}
+
+.typesel {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  text-align: center;
+  text-align-last: center;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.typesel:focus { background: #15201f; }
+.type-연차 { background: rgba(240, 200, 110, .14); color: #f0c86e; }
+.type-오전반차 { background: rgba(63, 224, 197, .14); color: var(--mint); }
+.type-오후반차 { background: rgba(63, 224, 197, .20); color: var(--mint); }
+.type-휴일 { background: rgba(255, 255, 255, .05); color: var(--muted); }
+
+/* 공휴일 (자동, 8시간 인정) */
+#grid thead th.hol, #grid thead th.hol .date { color: var(--red); }
+.holtag {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--red); font-size: 11px; font-weight: 700;
+  background: rgba(255, 107, 94, .12);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 4px;
+}
+.cellinput.muted { opacity: .3; }
+.cellinput:disabled { cursor: default; }
+
+#rowWork td {
+  color: var(--work);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .3px;
+}
+#rowWork td.over { color: var(--over); }
+#rowWork td.holiday { color: var(--muted); font-weight: 500; }
+
+/* ---- summary ---- */
+.sumcap {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 11px 3px 3px;
+  letter-spacing: .2px;
+}
+.sumcap::before { content: "▸ "; color: var(--mint-dim); font-weight: 700; }
+
+.summary {
+  display: grid;
+  grid-template-columns: 96px 1fr 96px 1fr 96px 1fr;
+  margin-top: 3px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.summary .cell {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--line);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.summary .cell:last-child { border-right: 0; }
+.summary .label {
+  background: var(--mint-deep);
+  color: var(--mint);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .2px;
+}
+.summary .val { font-weight: 800; color: var(--text); letter-spacing: .3px; }
+.summary.week { margin-top: 8px; }
+.summary .val.ot { color: var(--red); }   /* 주 40시간 초과(연장) */
+
+.status {
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--muted);
+  min-height: 14px;
+  text-align: right;
+}
+.status.err { color: #ff7a6b; }
+.status.ok { color: var(--mint); }

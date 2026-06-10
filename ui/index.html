@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>근태</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <button id="prevWeek" class="navbtn" title="지난 주">◀</button>
+      <div id="weekLabel" class="weeklabel">이번 주</div>
+      <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
+      <div class="spacer"></div>
+      <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
+    </div>
+
+    <table id="grid">
+      <thead>
+        <tr id="headRow"></tr>
+      </thead>
+      <tbody>
+        <tr id="rowType"><th class="rowlabel">연차/휴일</th></tr>
+        <tr id="rowIn"><th class="rowlabel">출근 시간</th></tr>
+        <tr id="rowOut"><th class="rowlabel">퇴근 시간</th></tr>
+        <tr id="rowWork"><th class="rowlabel">근무 시간</th></tr>
+      </tbody>
+    </table>
+
+    <div class="sumcap">현재 시각 기준</div>
+    <div class="summary">
+      <div class="cell label">현재 시간</div>
+      <div id="sNow" class="cell val"></div>
+      <div class="cell label">잔여 근무</div>
+      <div id="sRemainNow" class="cell val"></div>
+      <div class="cell label">주간 누적</div>
+      <div id="sCumNow" class="cell val"></div>
+    </div>
+
+    <div class="sumcap">예정 포함 — 입력한 퇴근시간 기준 · 주 40h</div>
+    <div class="summary">
+      <div class="cell label">주간 누적</div>
+      <div id="sCumPlan" class="cell val"></div>
+      <div class="cell label">주간 잔여</div>
+      <div id="sRemainPlan" class="cell val"></div>
+      <div class="cell label">주 목표</div>
+      <div id="sTarget" class="cell val"></div>
+    </div>
+
+    <div id="statusLine" class="status"></div>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

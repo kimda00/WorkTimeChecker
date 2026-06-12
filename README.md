@@ -16,7 +16,7 @@
 | `app.py` | pywebview 창 + pystray 트레이 + JS 브리지(저장 / EHR / 공휴일). **exe 진입점** |
 | `ui/index.html` · `ui/style.css` · `ui/app.js` | 그리드 UI와 **모든 시간 계산 로직**(다크+민트 테마) |
 | `ehr.py` | Playwright로 DaouOffice 근태 API를 조회. 로그인 세션은 `.ehr_state.json`에 저장 |
-| `build.ps1` · `빌드.bat` | PyInstaller로 단일 `dist/WorkTime.exe` 빌드 |
+| `build.ps1` · `build.bat` | PyInstaller로 단일 `dist/WorkTime.exe` 빌드 |
 | `requirements.txt` | pywebview, pythonnet, pystray, Pillow, playwright, holidays |
 
 - 입력값/세션 저장: 개발 시 폴더 안(`data.json`·`.ehr_state.json`), exe 배포 시 `%APPDATA%\worktime\`
@@ -30,7 +30,7 @@ python -m venv .venv
 ```
 
 ## exe 빌드 · 배포
-- **`빌드.bat` 더블클릭** → `dist/WorkTime.exe` 생성 (~60MB, 받는 사람은 Python 불필요)
+- **`build.bat` 더블클릭** → `dist/WorkTime.exe` 생성 (~60MB, 받는 사람은 Python 불필요)
 - 받는 사람: exe 실행 → 우측 **로그인** 버튼으로 본인 그룹웨어 1회 로그인 → 이후 자동
 - 필요 조건: Windows + **Chrome 또는 Edge**(기본 탑재) + WebView2 런타임(대개 이미 있음)
 
@@ -39,7 +39,7 @@ python -m venv .venv
 ```powershell
 copy config.example.json config.json     # origin 값을 본인 회사 DaouOffice 주소로 수정
 ```
-`빌드.bat` 가 `config.json` 을 exe에 함께 묶으므로, 빌드 전에 먼저 설정해야 한다.
+`build.bat` 가 `config.json` 을 exe에 함께 묶으므로, 빌드 전에 먼저 설정해야 한다.
 
 ## EHR 연동 메모 (DaouOffice)
 DaouOffice 공통 API를 쓴다:

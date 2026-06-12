@@ -1,26 +1,31 @@
-# 근태 앱을 단일 exe(dist\WorkTime.exe)로 빌드한다.
-# 코드/UI를 수정한 뒤 이 스크립트(또는 빌드.bat)를 실행하면 exe가 새로 생성됨.
+# Build the app into a single exe: dist\WorkTime.exe
+# Run this (or build.bat) after changing code/UI to regenerate the exe.
+# (ASCII-only on purpose: Windows PowerShell 5.1 misparses UTF-8 Hangul without a BOM.)
 $ErrorActionPreference = "Stop"
 $dir = $PSScriptRoot
 $py = "$dir\.venv\Scripts\python.exe"
 if (-not (Test-Path $py)) {
-  Write-Host "[오류] .venv 가 없습니다. 먼저 가상환경을 만들고 requirements.txt 를 설치하세요:" -ForegroundColor Red
+  Write-Host "[ERROR] .venv not found. Create it and install requirements first:" -ForegroundColor Red
   Write-Host "  python -m venv .venv; .venv\Scripts\python -m pip install -r requirements.txt pyinstaller"
-  Read-Host "엔터로 종료"; exit 1
+  Read-Host "Press Enter to exit"; exit 1
 }
 
-# pyinstaller 설치 확인
+# Ensure pyinstaller is installed
 & $py -c "import PyInstaller" 2>$null
 if ($LASTEXITCODE -ne 0) { & $py -m pip install pyinstaller --quiet }
 
-# 그룹웨어 주소(config.json) 확인 — exe 에 번들됨
+# Groupware URL (config.json) gets bundled into the exe
 if (-not (Test-Path "$dir\config.json")) {
-  Write-Host "[안내] config.json 이 없습니다. 그룹웨어 주소를 먼저 설정하세요:" -ForegroundColor Yellow
-  Write-Host "  copy config.example.json config.json   (그리고 origin 값을 회사 주소로 수정)"
-  Read-Host "엔터로 종료"; exit 1
+  Write-Host "[INFO] config.json missing. Set the groupware URL first:" -ForegroundColor Yellow
+  Write-Host "  copy config.example.json config.json   (then edit the 'origin' value)"
+  Read-Host "Press Enter to exit"; exit 1
 }
 
-Write-Host "빌드 중... (2~4분)" -ForegroundColor Cyan
+# Close any running WorkTime.exe (a running exe locks the output file => build fails)
+Get-Process "WorkTime" -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 400
+
+Write-Host "Building... (2-4 min)" -ForegroundColor Cyan
 & "$dir\.venv\Scripts\pyinstaller.exe" --noconfirm --onefile --windowed --name "WorkTime" `
   --icon "$dir\icon.ico" `
   --add-data "$dir\ui;ui" `
@@ -38,9 +43,9 @@ Write-Host "빌드 중... (2~4분)" -ForegroundColor Cyan
 
 if (Test-Path "$dir\dist\WorkTime.exe") {
   $mb = [math]::Round((Get-Item "$dir\dist\WorkTime.exe").Length / 1MB, 1)
-  Write-Host "`n완료! dist\WorkTime.exe ($mb MB)" -ForegroundColor Green
-  Write-Host "이 파일 하나만 다른 사람에게 주면 됩니다 (Python 설치 불필요)."
+  Write-Host "`nDone! dist\WorkTime.exe ($mb MB)" -ForegroundColor Green
+  Write-Host "Send just this one file to others (no Python needed)."
 } else {
-  Write-Host "빌드 실패 — 위 로그를 확인하세요." -ForegroundColor Red
+  Write-Host "Build failed - check the log above." -ForegroundColor Red
 }
-Read-Host "`n엔터로 종료"
+Read-Host "`nPress Enter to exit"

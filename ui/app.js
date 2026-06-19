@@ -14,6 +14,7 @@ let holidayMap = {};       // { 'YYYY-MM-DD': '공휴일 이름' } — 8시간 �
 /* ---------------- time helpers (단위: 초) ---------------- */
 function pad(n) { return String(n).padStart(2, '0'); }
 function floorToMinuteSec(sec) { return Math.floor(sec / 60) * 60; }
+function ceilToMinuteSec(sec) { return Math.ceil(sec / 60) * 60; }
 
 function parseTimeToSec(str) {
   if (str === null || str === undefined) return null;
@@ -67,6 +68,19 @@ function fmtDur(sec) {
 }
 function overlap(a, b, ls, le) {
   return Math.max(0, Math.min(b, le) - Math.max(a, ls));
+}
+function workOnlySec(start, end, settings) {
+  const e = Math.max(start, end);
+  return Math.max(0, (e - start) - overlap(start, e, settings.lunchStart, settings.lunchEnd));
+}
+function endAfterWorkSec(start, work, settings) {
+  let end = start + Math.max(0, work);
+  for (let i = 0; i < 4; i++) {
+    const next = start + Math.max(0, work) + overlap(start, end, settings.lunchStart, settings.lunchEnd);
+    if (next === end) break;
+    end = next;
+  }
+  return floorToMinuteSec(end);
 }
 
 /* ---------------- date helpers ---------------- */
@@ -205,6 +219,50 @@ function weeklySum(wk, s, mondayKey, now, mode) {
   return total;
 }
 
+function estimateCheckout(wk, s, mondayKey, now) {
+  const monday = new Date(mondayKey + 'T00:00:00');
+  const todayStr = ymd(new Date());
+  const weeklyTarget = s.weeklyTarget || 144000;
+  let fixedTotal = 0;
+  const pending = [];
+
+  DAYS.forEach(([key], i) => {
+    const dayStr = ymd(addDays(monday, i));
+    const ec = ecell(wk[key], dayStr);
+    const t = ec.type;
+    const outS = parseTimeToSec(ec.out);
+    const isFullOff = (t === '연차' || t === '공휴일' || t === '휴일');
+
+    if (isFullOff) {
+      fixedTotal += s.dailyTarget;
+      return;
+    }
+    if (outS !== null) {
+      const w = workedWith(ec, s, outS);
+      if (w) fixedTotal += w;
+      return;
+    }
+
+    const credit = creditSec(ec, s);
+    if (credit) fixedTotal += credit;
+    if (dayStr >= todayStr) pending.push({ dayStr, cell: ec });
+  });
+
+  if (!pending.length) return { days: 0, daily: null, out: null };
+
+  const remaining = Math.max(0, weeklyTarget - fixedTotal);
+  const daily = ceilToMinuteSec(remaining / pending.length);
+  const today = pending.find(d => d.dayStr === todayStr);
+  if (!today) return { days: pending.length, daily, out: null };
+
+  const inS = parseTimeToSec(today.cell.in);
+  if (inS === null) return { days: pending.length, daily, out: null };
+
+  const workedNow = workOnlySec(inS, now, s);
+  const out = workedNow >= daily ? now : endAfterWorkSec(inS, daily, s);
+  return { days: pending.length, daily, out: floorToMinuteSec(out) };
+}
+
 // 잔여(초)를 셀에 표시. 음수면(40h 초과) 빨간 '+연장'.
 function setRemainCell(id, diff) {
   const el = document.getElementById(id);
@@ -216,6 +274,19 @@ function setRemainCell(id, diff) {
     el.textContent = '+' + fmtDur(-diff);
     el.classList.add('ot');
   }
+}
+function setEstimateSummary(info) {
+  document.getElementById('sEstDays').textContent = info.days ? info.days + '일' : '-';
+  document.getElementById('sEstDaily').textContent = info.daily === null ? '-' : fmtDur(info.daily);
+  document.getElementById('sEstOut').textContent = info.out === null ? '-' : fmt24(info.out);
+}
+function setEstimatedOutPlaceholder(info, todayKey) {
+  document.querySelectorAll('.cellinput[data-field="out"]').forEach(inp => {
+    inp.placeholder = '퇴근';
+  });
+  if (!todayKey || info.out === null) return;
+  const inp = document.querySelector('.cellinput[data-day="' + todayKey + '"][data-field="out"]');
+  if (inp && !inp.value) inp.placeholder = '예상 ' + fmt24(info.out);
 }
 
 /* ---------------- render ---------------- */
@@ -377,6 +448,7 @@ function recompute() {
   const wTgt = s.weeklyTarget || 144000;
   const nowTotal = weeklySum(wk, s, mondayKey, now, 'now');   // 지금까지(미래·예정 제외)
   const planTotal = weeklySum(wk, s, mondayKey, now, 'plan'); // 예정 포함(입력 퇴근시각)
+  const est = isThisWeek ? estimateCheckout(wk, s, mondayKey, now) : { days: 0, daily: null, out: null };
 
   // 1줄: 지금까지 — 현재 시각 기준
   document.getElementById('sNow').textContent = fmtKor(now);
@@ -387,6 +459,8 @@ function recompute() {
   document.getElementById('sCumPlan').textContent = fmtDur(planTotal);
   setRemainCell('sRemainPlan', wTgt - planTotal);
   document.getElementById('sTarget').textContent = fmtDur(wTgt);
+  setEstimateSummary(est);
+  setEstimatedOutPlaceholder(est, isThisWeek ? ti.dayKey : null);
 }
 
 /* ---------------- EHR ---------------- */

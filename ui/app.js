@@ -217,6 +217,20 @@ function setRemainCell(id, diff) {
   }
 }
 
+// 주간 잔여(remainNow)를 지금부터 채운다고 가정한 예상 퇴근 시각 표시.
+// 이미 주 목표를 채웠으면(remainNow<=0) "퇴근 가능"으로 표시.
+function setExpectedOutCell(id, now, remainNow) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (remainNow <= 0) {
+    el.textContent = '퇴근 가능';
+    el.classList.add('ot');
+  } else {
+    el.textContent = fmtKor(now + remainNow);
+    el.classList.remove('ot');
+  }
+}
+
 /* ---------------- render ---------------- */
 function buildGrid() {
   const head = document.getElementById('headRow');
@@ -378,13 +392,14 @@ function recompute() {
   const planTotal = weeklySum(wk, s, mondayKey, now, 'plan'); // 예정 포함(입력 퇴근시각)
 
   // 1줄: 지금까지 — 현재 시각 기준
+  const remainNow = wTgt - nowTotal;
   document.getElementById('sNow').textContent = fmtKor(now);
-  setRemainCell('sRemainNow', wTgt - nowTotal);
+  setRemainCell('sRemainNow', remainNow);
   document.getElementById('sCumNow').textContent = fmtDur(nowTotal);
 
-  // 2줄: 예정 포함 — 입력한 퇴근시간 기준 (주 40h)
+  // 2줄: 예정 포함 — 지금부터 쉬지 않고 일하면 퇴근 가능한 시각 (주 40h 채우는 시각)
   document.getElementById('sCumPlan').textContent = fmtDur(planTotal);
-  setRemainCell('sRemainPlan', wTgt - planTotal);
+  setExpectedOutCell('sExpectedOut', now, remainNow);
   document.getElementById('sTarget').textContent = fmtDur(wTgt);
 }
 

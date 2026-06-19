@@ -13,6 +13,7 @@ let holidayMap = {};       // { 'YYYY-MM-DD': '공휴일 이름' } — 8시간 �
 
 /* ---------------- time helpers (단위: 초) ---------------- */
 function pad(n) { return String(n).padStart(2, '0'); }
+function floorToMinuteSec(sec) { return Math.floor(sec / 60) * 60; }
 
 function parseTimeToSec(str) {
   if (str === null || str === undefined) return null;
@@ -81,7 +82,7 @@ function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); retu
 
 function nowSec() {
   const n = new Date();
-  return (n.getHours() * 60 + n.getMinutes()) * 60;
+  return floorToMinuteSec((n.getHours() * 60 + n.getMinutes()) * 60 + n.getSeconds());
 }
 function todayInfo() {
   const now = new Date();
@@ -341,7 +342,7 @@ function onCellChange(e) {
     }
   } else {
     const sec = parseTimeToSec(el.value);
-    const norm = sec === null ? '' : fmt24(sec);
+    const norm = sec === null ? '' : fmt24(floorToMinuteSec(sec));
     el.value = norm;
     c[el.dataset.field] = norm;
   }

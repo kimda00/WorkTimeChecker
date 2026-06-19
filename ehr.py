@@ -49,7 +49,9 @@ def _load_origin():
             with open(p, "r", encoding="utf-8") as f:
                 v = (json.load(f) or {}).get("origin")
                 if v:
-                    return v.rstrip("/")
+                    origin = v.rstrip("/")
+                    if "your-company.com" not in origin:
+                        return origin
         except Exception:
             pass
     return (os.environ.get("WORKTIME_GROUPWARE_URL") or "").rstrip("/")

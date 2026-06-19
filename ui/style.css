@@ -75,6 +75,37 @@ html, body {
 .ehrbtn:hover { filter: brightness(1.08); box-shadow: 0 0 14px rgba(63, 224, 197, .25); }
 .ehrbtn:disabled { opacity: .5; cursor: default; filter: none; box-shadow: none; }
 
+.settingbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: -2px 0 10px;
+}
+.settinglabel {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.settinginput {
+  width: 86px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--time);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+.settinginput:focus {
+  border-color: var(--mint);
+  box-shadow: 0 0 0 1px rgba(63, 224, 197, .35);
+}
+
 /* ---- grid ---- */
 table#grid {
   border-collapse: separate;
@@ -190,6 +221,12 @@ table#grid {
 }
 #rowWork td.over { color: var(--over); }
 #rowWork td.holiday { color: var(--muted); font-weight: 500; }
+#rowEstOut td {
+  color: #f0c86e;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+#rowEstOut td.muted { color: var(--muted); font-weight: 500; }
 
 /* ---- summary ---- */
 .sumcap {

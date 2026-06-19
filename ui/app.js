@@ -108,7 +108,7 @@ function todayInfo() {
 /* ---------------- state ---------------- */
 function defaultState() {
   return {
-    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000 },
+    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000, defaultIn: '09:00:00' },
     weeks: {},
   };
 }
@@ -219,7 +219,7 @@ function weeklySum(wk, s, mondayKey, now, mode) {
   return total;
 }
 
-function estimateCheckout(wk, s, mondayKey, now) {
+function estimateCheckouts(wk, s, mondayKey, now) {
   const monday = new Date(mondayKey + 'T00:00:00');
   const todayStr = ymd(new Date());
   const weeklyTarget = s.weeklyTarget || 144000;
@@ -245,22 +245,28 @@ function estimateCheckout(wk, s, mondayKey, now) {
 
     const credit = creditSec(ec, s);
     if (credit) fixedTotal += credit;
-    if (dayStr >= todayStr) pending.push({ dayStr, cell: ec });
+    if (dayStr >= todayStr) pending.push({ key, dayStr, cell: ec });
   });
 
-  if (!pending.length) return { days: 0, daily: null, out: null };
+  if (!pending.length) return {};
 
   const remaining = Math.max(0, weeklyTarget - fixedTotal);
   const daily = ceilToMinuteSec(remaining / pending.length);
-  const today = pending.find(d => d.dayStr === todayStr);
-  if (!today) return { days: pending.length, daily, out: null };
+  const defaultIn = parseTimeToSec(s.defaultIn);
+  const result = {};
 
-  const inS = parseTimeToSec(today.cell.in);
-  if (inS === null) return { days: pending.length, daily, out: null };
+  pending.forEach(day => {
+    const start = parseTimeToSec(day.cell.in);
+    const startS = start !== null ? start : defaultIn;
+    if (startS === null) return;
 
-  const workedNow = workOnlySec(inS, now, s);
-  const out = workedNow >= daily ? now : endAfterWorkSec(inS, daily, s);
-  return { days: pending.length, daily, out: floorToMinuteSec(out) };
+    const needed = Math.max(0, daily);
+    const workedNow = day.dayStr === todayStr ? workOnlySec(startS, now, s) : 0;
+    const out = workedNow >= needed ? now : endAfterWorkSec(startS, needed, s);
+    result[day.key] = floorToMinuteSec(out);
+  });
+
+  return result;
 }
 
 // 잔여(초)를 셀에 표시. 음수면(40h 초과) 빨간 '+연장'.
@@ -275,25 +281,19 @@ function setRemainCell(id, diff) {
     el.classList.add('ot');
   }
 }
-function setEstimateSummary(info) {
-  document.getElementById('sEstDays').textContent = info.days ? info.days + '일' : '-';
-  document.getElementById('sEstDaily').textContent = info.daily === null ? '-' : fmtDur(info.daily);
-  document.getElementById('sEstOut').textContent = info.out === null ? '-' : fmt24(info.out);
-}
-function setEstimatedOutPlaceholder(info, todayKey) {
-  document.querySelectorAll('.cellinput[data-field="out"]').forEach(inp => {
-    inp.placeholder = '퇴근';
+function renderEstimatedCheckoutCells(estimates) {
+  document.querySelectorAll('#rowEstOut td').forEach(td => {
+    const value = estimates[td.dataset.day];
+    td.textContent = value === undefined ? '' : fmt24(value);
+    td.classList.toggle('muted', value === undefined);
   });
-  if (!todayKey || info.out === null) return;
-  const inp = document.querySelector('.cellinput[data-day="' + todayKey + '"][data-field="out"]');
-  if (inp && !inp.value) inp.placeholder = '예상 ' + fmt24(info.out);
 }
 
 /* ---------------- render ---------------- */
 function buildGrid() {
   const head = document.getElementById('headRow');
   head.innerHTML = '<th class="corner"></th>';
-  for (const tr of ['rowType', 'rowIn', 'rowOut', 'rowWork']) {
+  for (const tr of ['rowType', 'rowIn', 'rowOut', 'rowWork', 'rowEstOut']) {
     const row = document.getElementById(tr);
     // 첫 번째 th(rowlabel)만 남기고 제거
     while (row.children.length > 1) row.removeChild(row.lastChild);
@@ -356,6 +356,11 @@ function buildGrid() {
     tdW.dataset.day = key;
     if (isToday) tdW.classList.add('today');
     document.getElementById('rowWork').appendChild(tdW);
+
+    const tdEst = document.createElement('td');
+    tdEst.dataset.day = key;
+    if (isToday) tdEst.classList.add('today');
+    document.getElementById('rowEstOut').appendChild(tdEst);
   });
 
   // bind events
@@ -380,6 +385,8 @@ function fillInputsFromState() {
     const c = wk[inp.dataset.day];
     inp.value = c[inp.dataset.field] || '';
   });
+  const defaultIn = document.getElementById('defaultIn');
+  if (defaultIn) defaultIn.value = state.settings.defaultIn || '';
 }
 
 function applyTypeClass(sel) {
@@ -421,6 +428,15 @@ function onCellChange(e) {
   recompute();
 }
 
+function onDefaultInChange(e) {
+  const sec = parseTimeToSec(e.target.value);
+  const norm = sec === null ? '' : fmt24(floorToMinuteSec(sec));
+  e.target.value = norm;
+  state.settings.defaultIn = norm;
+  scheduleSave();
+  recompute();
+}
+
 function recompute() {
   const s = state.settings;
   const mondayKey = shownMondayKey();
@@ -448,7 +464,7 @@ function recompute() {
   const wTgt = s.weeklyTarget || 144000;
   const nowTotal = weeklySum(wk, s, mondayKey, now, 'now');   // 지금까지(미래·예정 제외)
   const planTotal = weeklySum(wk, s, mondayKey, now, 'plan'); // 예정 포함(입력 퇴근시각)
-  const est = isThisWeek ? estimateCheckout(wk, s, mondayKey, now) : { days: 0, daily: null, out: null };
+  const estimates = isThisWeek ? estimateCheckouts(wk, s, mondayKey, now) : {};
 
   // 1줄: 지금까지 — 현재 시각 기준
   document.getElementById('sNow').textContent = fmtKor(now);
@@ -459,8 +475,7 @@ function recompute() {
   document.getElementById('sCumPlan').textContent = fmtDur(planTotal);
   setRemainCell('sRemainPlan', wTgt - planTotal);
   document.getElementById('sTarget').textContent = fmtDur(wTgt);
-  setEstimateSummary(est);
-  setEstimatedOutPlaceholder(est, isThisWeek ? ti.dayKey : null);
+  renderEstimatedCheckoutCells(estimates);
 }
 
 /* ---------------- EHR ---------------- */
@@ -578,6 +593,7 @@ async function loadState() {
   state = loaded && loaded.settings ? loaded : defaultState();
   if (!state.weeks) state.weeks = {};
   if (!state.settings) state.settings = defaultState().settings;
+  state.settings = Object.assign({}, defaultState().settings, state.settings);
 }
 
 async function loadHolidays() {
@@ -615,6 +631,11 @@ async function init() {
   document.getElementById('prevWeek').addEventListener('click', () => { weekOffset--; rerenderWeek(); });
   document.getElementById('nextWeek').addEventListener('click', () => { weekOffset++; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
+  const defaultIn = document.getElementById('defaultIn');
+  if (defaultIn) {
+    defaultIn.addEventListener('change', onDefaultInChange);
+    defaultIn.addEventListener('keydown', e => { if (e.key === 'Enter') defaultIn.blur(); });
+  }
 
   setInterval(recompute, 1000);
 

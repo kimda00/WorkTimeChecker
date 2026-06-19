@@ -16,6 +16,11 @@
       <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
     </div>
 
+    <div class="settingbar">
+      <span class="settinglabel">기본 출근 예정</span>
+      <input id="defaultIn" class="settinginput" placeholder="09:00" />
+    </div>
+
     <table id="grid">
       <thead>
         <tr id="headRow"></tr>
@@ -25,6 +30,7 @@
         <tr id="rowIn"><th class="rowlabel">출근 시간</th></tr>
         <tr id="rowOut"><th class="rowlabel">퇴근 시간</th></tr>
         <tr id="rowWork"><th class="rowlabel">근무 시간</th></tr>
+        <tr id="rowEstOut"><th class="rowlabel">예상 퇴근</th></tr>
       </tbody>
     </table>
 
@@ -46,16 +52,6 @@
       <div id="sRemainPlan" class="cell val"></div>
       <div class="cell label">주 목표</div>
       <div id="sTarget" class="cell val"></div>
-    </div>
-
-    <div class="sumcap">예상 퇴근 — 퇴근 미입력일 균등 배분</div>
-    <div class="summary">
-      <div class="cell label">남은 근무일</div>
-      <div id="sEstDays" class="cell val"></div>
-      <div class="cell label">일 필요 근무</div>
-      <div id="sEstDaily" class="cell val"></div>
-      <div class="cell label">예상 퇴근</div>
-      <div id="sEstOut" class="cell val"></div>
     </div>
 
     <div id="statusLine" class="status"></div>

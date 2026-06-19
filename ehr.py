@@ -73,6 +73,22 @@ LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 _CHANNELS = ["chrome", "msedge", None]
 
 
+def _minute_time(value):
+    if not value:
+        return ""
+    parts = str(value).split(":")
+    if len(parts) < 2:
+        return ""
+    try:
+        h = int(parts[0])
+        m = int(parts[1])
+    except Exception:
+        return ""
+    if h < 0 or h > 47 or m < 0 or m > 59:
+        return ""
+    return f"{h:02d}:{m:02d}"
+
+
 def _launch(p, headless):
     last = None
     for ch in _CHANNELS:
@@ -108,9 +124,9 @@ def _parse_month(j, records):
                 continue
             rec = records.setdefault(day, {})
             if cin:
-                rec["in"] = str(cin)[:8]
+                rec["in"] = _minute_time(cin)
             if cout:
-                rec["out"] = str(cout)[:8]
+                rec["out"] = _minute_time(cout)
     return records
 
 

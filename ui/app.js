@@ -46,25 +46,25 @@ function parseTimeToSec(str) {
 
 function fmt24(sec) {
   if (sec === null || sec === undefined) return '';
-  sec = Math.round(sec);
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  return pad(h) + ':' + pad(m) + ':' + pad(s);
+  sec = floorToMinuteSec(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return pad(h) + ':' + pad(m);
 }
 function fmtKor(sec) {
   if (sec === null || sec === undefined) return '-';
-  sec = Math.round(sec);
+  sec = floorToMinuteSec(sec);
   let h = Math.floor(sec / 3600) % 24;
-  const m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const m = Math.floor((sec % 3600) / 60);
   const ap = h < 12 ? '오전' : '오후';
   let h12 = h % 12; if (h12 === 0) h12 = 12;
-  return ap + ' ' + h12 + ':' + pad(m) + ':' + pad(s);
+  return ap + ' ' + h12 + ':' + pad(m);
 }
 function fmtDur(sec) {
   if (sec === null || sec === undefined) return '-';
   const neg = sec < 0;
-  sec = Math.abs(Math.round(sec));
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-  return (neg ? '-' : '') + h + ':' + pad(m) + ':' + pad(s);
+  sec = Math.abs(floorToMinuteSec(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return (neg ? '-' : '') + h + ':' + pad(m);
 }
 function overlap(a, b, ls, le) {
   return Math.max(0, Math.min(b, le) - Math.max(a, ls));
@@ -108,7 +108,7 @@ function todayInfo() {
 /* ---------------- state ---------------- */
 function defaultState() {
   return {
-    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000, defaultIn: '09:00:00' },
+    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000, defaultIn: '09:00' },
     weeks: {},
   };
 }
@@ -124,6 +124,29 @@ function weekData(mondayKey) {
   // 누락 키 보정
   for (const [k] of DAYS) if (!state.weeks[mondayKey][k]) state.weeks[mondayKey][k] = { type: '', in: '', out: '' };
   return state.weeks[mondayKey];
+}
+
+function normalizeTimeValue(value) {
+  const sec = parseTimeToSec(value);
+  return sec === null ? '' : fmt24(floorToMinuteSec(sec));
+}
+
+function normalizeStoredTimes() {
+  state.settings.defaultIn = normalizeTimeValue(state.settings.defaultIn || defaultState().settings.defaultIn);
+  const ti = todayInfo();
+  const now = nowSec();
+  Object.keys(state.weeks || {}).forEach(mondayKey => {
+    const wk = state.weeks[mondayKey];
+    for (const [key] of DAYS) {
+      if (!wk[key]) continue;
+      wk[key].in = normalizeTimeValue(wk[key].in);
+      wk[key].out = normalizeTimeValue(wk[key].out);
+      if (mondayKey === ti.mondayKey && key === ti.dayKey) {
+        const outS = parseTimeToSec(wk[key].out);
+        if (outS !== null && outS > now) wk[key].out = '';
+      }
+    }
+  });
 }
 
 function scheduleSave() {
@@ -414,13 +437,12 @@ function onCellChange(e) {
     // 오전반차 → 출근 13:00 자동 / 오후반차 → 퇴근 13:00 자동
     if (el.value === '오전반차' || el.value === '오후반차') {
       const field = el.value === '오전반차' ? 'in' : 'out';
-      c[field] = '13:00:00';
+      c[field] = '13:00';
       const inp = document.querySelector('.cellinput[data-day="' + el.dataset.day + '"][data-field="' + field + '"]');
       if (inp) inp.value = c[field];
     }
   } else {
-    const sec = parseTimeToSec(el.value);
-    const norm = sec === null ? '' : fmt24(floorToMinuteSec(sec));
+    const norm = normalizeTimeValue(el.value);
     el.value = norm;
     c[el.dataset.field] = norm;
   }
@@ -429,8 +451,7 @@ function onCellChange(e) {
 }
 
 function onDefaultInChange(e) {
-  const sec = parseTimeToSec(e.target.value);
-  const norm = sec === null ? '' : fmt24(floorToMinuteSec(sec));
+  const norm = normalizeTimeValue(e.target.value);
   e.target.value = norm;
   state.settings.defaultIn = norm;
   scheduleSave();
@@ -534,8 +555,14 @@ async function refreshEhr(manual) {
     if (idx > 4) continue;
     const wk = weekData(mk);
     const key = DAYS[idx][0];
-    if (recs[dateStr].in) wk[key].in = recs[dateStr].in;
-    if (recs[dateStr].out) wk[key].out = recs[dateStr].out;
+    if (recs[dateStr].in) wk[key].in = normalizeTimeValue(recs[dateStr].in);
+    if (recs[dateStr].out) {
+      const out = normalizeTimeValue(recs[dateStr].out);
+      const outS = parseTimeToSec(out);
+      const isToday = dateStr === ymd(new Date());
+      if (isToday && outS !== null && outS > nowSec()) wk[key].out = '';
+      else wk[key].out = out;
+    }
     n++;
   }
   await doSave();
@@ -594,6 +621,8 @@ async function loadState() {
   if (!state.weeks) state.weeks = {};
   if (!state.settings) state.settings = defaultState().settings;
   state.settings = Object.assign({}, defaultState().settings, state.settings);
+  normalizeStoredTimes();
+  await doSave();
 }
 
 async function loadHolidays() {

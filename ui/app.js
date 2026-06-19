@@ -81,7 +81,7 @@ function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); retu
 
 function nowSec() {
   const n = new Date();
-  return (n.getHours() * 60 + n.getMinutes()) * 60 + n.getSeconds();
+  return (n.getHours() * 60 + n.getMinutes()) * 60;
 }
 function todayInfo() {
   const now = new Date();

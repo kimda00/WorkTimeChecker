@@ -7,12 +7,22 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <div id="xlTitlebar" class="xltitlebar">
+    <span class="xlicon">X</span>
+    <span class="xlfile">근태 — 근무시간.xlsx</span>
+  </div>
+  <div id="xlFormula" class="xlformula">
+    <span class="fb-ref"><span id="fbRefText"></span><span class="fb-caret">▾</span></span>
+    <span class="fb-fx">fx</span>
+    <span id="fbVal" class="fb-val"></span>
+  </div>
   <div class="wrap">
     <div class="topbar">
       <button id="prevWeek" class="navbtn" title="지난 주">◀</button>
       <div id="weekLabel" class="weeklabel">이번 주</div>
       <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
       <div class="spacer"></div>
+      <button id="themeBtn" class="themebtn" title="다크 / 엑셀 테마 전환">엑셀</button>
       <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
     </div>
 
@@ -23,14 +33,23 @@
 
     <table id="grid">
       <thead>
+        <tr id="colRow">
+          <th class="snum scorner"></th>
+          <th class="scol scol-label">A</th>
+          <th class="scol">B</th>
+          <th class="scol">C</th>
+          <th class="scol">D</th>
+          <th class="scol">E</th>
+          <th class="scol">F</th>
+        </tr>
         <tr id="headRow"></tr>
       </thead>
       <tbody>
-        <tr id="rowType"><th class="rowlabel">연차/휴일</th></tr>
-        <tr id="rowIn"><th class="rowlabel">출근 시간</th></tr>
-        <tr id="rowOut"><th class="rowlabel">퇴근 시간</th></tr>
-        <tr id="rowWork"><th class="rowlabel">근무 시간</th></tr>
-        <tr id="rowEstOut"><th class="rowlabel">예상 퇴근</th></tr>
+        <tr id="rowType"><th class="snum">2</th><th class="rowlabel">연차/휴일</th></tr>
+        <tr id="rowIn"><th class="snum">3</th><th class="rowlabel">출근 시간</th></tr>
+        <tr id="rowOut"><th class="snum">4</th><th class="rowlabel">퇴근 시간</th></tr>
+        <tr id="rowWork"><th class="snum">5</th><th class="rowlabel">근무 시간</th></tr>
+        <tr id="rowEstOut"><th class="snum">6</th><th class="rowlabel">예상 퇴근</th></tr>
       </tbody>
     </table>
 

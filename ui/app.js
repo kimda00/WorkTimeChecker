@@ -108,7 +108,7 @@ function todayInfo() {
 /* ---------------- state ---------------- */
 function defaultState() {
   return {
-    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000, defaultIn: '09:00' },
+    settings: { dailyTarget: 28800, halfTarget: 14400, lunchStart: 43200, lunchEnd: 46800, weeklyTarget: 144000, defaultIn: '09:00', theme: 'dark' },
     weeks: {},
   };
 }
@@ -131,16 +131,17 @@ function normalizeTimeValue(value) {
   const sec = parseTimeToSec(value);
   return sec === null ? '' : fmt24(floorToMinuteSec(sec));
 }
-// 저장용: 초까지 보존 ('07:43:27' → '07:43:27', 수동 입력은 ':00').
-// EHR이 준 초 단위를 근무시간 계산에 써야 회사 공식 총계와 일치한다. 표시만 분으로 내림.
+// 시:분:초 포맷터 (저장 형식 HH:MM:SS).
 function fmtClock(sec) {
   sec = Math.max(0, Math.round(sec));
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
   return pad(h) + ':' + pad(m) + ':' + pad(s);
 }
+// 저장용: 분 단위로 내려 저장 ('07:43:27' → '07:43:00').
+// EHR 공식 총계가 출퇴근을 '분 단위로 자른 뒤' 계산하므로, 우리도 분으로 내려야 값이 일치한다.
 function normalizeClockValue(value) {
   const sec = parseTimeToSec(value);
-  return sec === null ? '' : fmtClock(sec);
+  return sec === null ? '' : fmtClock(floorToMinuteSec(sec));
 }
 
 function normalizeStoredTimes() {
@@ -170,6 +171,49 @@ async function doSave() {
     if (window.pywebview && pywebview.api) await pywebview.api.save(state);
     else localStorage.setItem('worktime', JSON.stringify(state));
   } catch (e) { /* ignore */ }
+}
+
+/* ---------------- theme ---------------- */
+// 다크(기본) ↔ 엑셀(스프레드시트) 테마. <html data-theme>로 CSS 변수 세트를 교체한다.
+function applyTheme(theme) {
+  const t = (theme === 'excel') ? 'excel' : 'dark';
+  document.documentElement.setAttribute('data-theme', t);
+  const btn = document.getElementById('themeBtn');
+  if (btn) btn.textContent = (t === 'excel') ? '다크' : '엑셀';   // 누르면 갈 테마를 라벨로
+}
+function toggleTheme() {
+  const next = (state.settings.theme === 'excel') ? 'dark' : 'excel';
+  state.settings.theme = next;
+  applyTheme(next);
+  scheduleSave();
+}
+
+/* ---------------- formula bar (엑셀 테마 장식) ---------------- */
+// 셀 주소: 열 B~F = 월~금(A는 라벨열), 행 2=유형 3=출근 4=퇴근.
+function cellRef(day, field) {
+  const idx = DAYS.findIndex(d => d[0] === day);
+  if (idx < 0) return '';
+  const col = String.fromCharCode(66 + idx);   // B..F
+  const row = field === 'type' ? 2 : field === 'in' ? 3 : field === 'out' ? 4 : '';
+  return col + row;
+}
+function updateFormulaBar(day, field, value) {
+  const r = document.getElementById('fbRefText');
+  const v = document.getElementById('fbVal');
+  if (r) r.textContent = cellRef(day, field);
+  if (v) v.textContent = value || '';
+}
+function bindFormulaBar() {
+  const grid = document.getElementById('grid');
+  if (!grid) return;
+  const onFocus = e => {
+    const el = e.target;
+    if (!el.classList) return;
+    if (el.classList.contains('cellinput')) updateFormulaBar(el.dataset.day, el.dataset.field, el.value);
+    else if (el.classList.contains('typesel')) updateFormulaBar(el.dataset.day, 'type', el.value || '—');
+  };
+  grid.addEventListener('focusin', onFocus);
+  grid.addEventListener('input', onFocus);
 }
 
 /* ---------------- calculation ---------------- */
@@ -329,11 +373,11 @@ function renderEstimatedCheckoutCells(estimates) {
 /* ---------------- render ---------------- */
 function buildGrid() {
   const head = document.getElementById('headRow');
-  head.innerHTML = '<th class="corner"></th>';
+  head.innerHTML = '<th class="snum">1</th><th class="corner"></th>';   // snum = 엑셀 테마의 행번호 거터
   for (const tr of ['rowType', 'rowIn', 'rowOut', 'rowWork', 'rowEstOut']) {
     const row = document.getElementById(tr);
-    // 첫 번째 th(rowlabel)만 남기고 제거
-    while (row.children.length > 1) row.removeChild(row.lastChild);
+    // 앞쪽 고정 th(행번호 + rowlabel) 2개만 남기고 제거
+    while (row.children.length > 2) row.removeChild(row.lastChild);
   }
 
   const mondayKey = shownMondayKey();
@@ -668,12 +712,15 @@ async function init() {
   if (started) return;
   started = true;
   await loadState();
+  applyTheme(state.settings.theme);
   await loadHolidays();
   rerenderWeek();
 
   document.getElementById('prevWeek').addEventListener('click', () => { weekOffset--; rerenderWeek(); });
   document.getElementById('nextWeek').addEventListener('click', () => { weekOffset++; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
+  document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+  bindFormulaBar();
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) {
     defaultIn.addEventListener('change', onDefaultInChange);

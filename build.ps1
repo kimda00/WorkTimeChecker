@@ -14,11 +14,10 @@ if (-not (Test-Path $py)) {
 & $py -c "import PyInstaller" 2>$null
 if ($LASTEXITCODE -ne 0) { & $py -m pip install pyinstaller --quiet }
 
-# Groupware URL (config.json) gets bundled into the exe
-if (-not (Test-Path "$dir\config.json")) {
-  Write-Host "[INFO] config.json missing. Set the groupware URL first:" -ForegroundColor Yellow
-  Write-Host "  copy config.example.json config.json   (then edit the 'origin' value)"
-  Read-Host "Press Enter to exit"; exit 1
+# Optional groupware URL override. If config.json is missing, ehr.py uses its built-in default.
+$dataArgs = @("--add-data", "$dir\ui;ui")
+if (Test-Path "$dir\config.json") {
+  $dataArgs += @("--add-data", "$dir\config.json;.")
 }
 
 # Close any running WorkTime.exe (a running exe locks the output file => build fails)
@@ -26,20 +25,25 @@ Get-Process "WorkTime" -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 400
 
 Write-Host "Building... (2-4 min)" -ForegroundColor Cyan
-& "$dir\.venv\Scripts\pyinstaller.exe" --noconfirm --onefile --windowed --name "WorkTime" `
-  --icon "$dir\icon.ico" `
-  --add-data "$dir\ui;ui" `
-  --add-data "$dir\config.json;." `
-  --collect-all playwright `
-  --collect-all webview `
-  --collect-all holidays `
-  --hidden-import ehr `
-  --hidden-import pystray._win32 `
-  --hidden-import clr `
-  --distpath "$dir\dist" `
-  --workpath "$dir\build" `
-  --specpath "$dir\build" `
+$pyinstallerArgs = @(
+  "--noconfirm",
+  "--onefile",
+  "--windowed",
+  "--name", "WorkTime",
+  "--icon", "$dir\icon.ico"
+) + $dataArgs + @(
+  "--collect-all", "playwright",
+  "--collect-all", "webview",
+  "--collect-all", "holidays",
+  "--hidden-import", "ehr",
+  "--hidden-import", "pystray._win32",
+  "--hidden-import", "clr",
+  "--distpath", "$dir\dist",
+  "--workpath", "$dir\build",
+  "--specpath", "$dir\build",
   "$dir\app.py"
+)
+& "$dir\.venv\Scripts\pyinstaller.exe" @pyinstallerArgs
 
 if (Test-Path "$dir\dist\WorkTime.exe") {
   $mb = [math]::Round((Get-Item "$dir\dist\WorkTime.exe").Length / 1MB, 1)

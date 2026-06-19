@@ -20,6 +20,7 @@ import sys
 import time
 
 BASE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_ORIGIN = "https://gw.suresofttech.com"
 
 
 def _data_dir():
@@ -54,7 +55,7 @@ def _load_origin():
                         return origin
         except Exception:
             pass
-    return (os.environ.get("WORKTIME_GROUPWARE_URL") or "").rstrip("/")
+    return (os.environ.get("WORKTIME_GROUPWARE_URL") or DEFAULT_ORIGIN).rstrip("/")
 
 
 ORIGIN = _load_origin()

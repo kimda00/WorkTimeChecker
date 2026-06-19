@@ -7,6 +7,7 @@
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -249,8 +250,51 @@ def run_tray():
     icon.run()
 
 
+# 단일 인스턴스: 루프백 포트를 잠금 겸 "창 표시" 신호 채널로 쓴다.
+# 닫으면 트레이로 숨는 앱이라, 두 번째 실행이 새 프로세스를 띄우는 대신
+# 이미 떠 있는 창을 다시 보여주고 즉시 끝낸다(백그라운드 누적 방지).
+_LOCK_PORT = 49517
+
+
+def acquire_single_instance():
+    """유일한 인스턴스면 listen 상태의 잠금 소켓을, 이미 실행 중이면
+    그 인스턴스에 '창 표시'를 신호한 뒤 None 을 돌려준다."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(("127.0.0.1", _LOCK_PORT))
+    except OSError:
+        s.close()
+        try:
+            with socket.create_connection(("127.0.0.1", _LOCK_PORT), timeout=2) as c:
+                c.sendall(b"show")
+        except OSError:
+            pass
+        return None
+    s.listen(1)
+    return s
+
+
+def serve_single_instance(lock):
+    """다른 실행이 신호를 보내오면 창을 다시 표시한다(데몬 스레드)."""
+    while True:
+        try:
+            conn, _ = lock.accept()
+        except OSError:
+            return
+        try:
+            conn.recv(16)
+        except OSError:
+            pass
+        finally:
+            conn.close()
+        show_window()
+
+
 def main():
     global window
+    lock = acquire_single_instance()
+    if lock is None:
+        return  # 이미 실행 중 — 그 인스턴스 창을 띄우게 신호만 보내고 끝낸다
     api = Api()
     window = webview.create_window(
         "근태",
@@ -261,6 +305,7 @@ def main():
         min_size=(720, 450),
     )
     window.events.closing += on_closing
+    threading.Thread(target=serve_single_instance, args=(lock,), daemon=True).start()
     if HAS_TRAY:
         threading.Thread(target=run_tray, daemon=True).start()
     webview.start()

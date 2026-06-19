@@ -73,7 +73,9 @@ LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 _CHANNELS = ["chrome", "msedge", None]
 
 
-def _minute_time(value):
+def _clock_time(value):
+    """HH:MM:SS 로 정규화(초 보존). EHR 초 단위를 근무시간 계산에 그대로 쓴다.
+    (화면 표시는 프론트의 fmt24/fmtDur가 분 단위로 내림)"""
     if not value:
         return ""
     parts = str(value).split(":")
@@ -82,11 +84,12 @@ def _minute_time(value):
     try:
         h = int(parts[0])
         m = int(parts[1])
+        s = int(parts[2]) if len(parts) > 2 else 0
     except Exception:
         return ""
-    if h < 0 or h > 47 or m < 0 or m > 59:
+    if h < 0 or h > 47 or m < 0 or m > 59 or s < 0 or s > 59:
         return ""
-    return f"{h:02d}:{m:02d}"
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 def _launch(p, headless):
@@ -124,9 +127,9 @@ def _parse_month(j, records):
                 continue
             rec = records.setdefault(day, {})
             if cin:
-                rec["in"] = _minute_time(cin)
+                rec["in"] = _clock_time(cin)
             if cout:
-                rec["out"] = _minute_time(cout)
+                rec["out"] = _clock_time(cout)
     return records
 
 

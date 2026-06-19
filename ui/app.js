@@ -126,9 +126,21 @@ function weekData(mondayKey) {
   return state.weeks[mondayKey];
 }
 
+// 화면 표시용: 분 단위로 내림 ('07:43:27' → '07:43')
 function normalizeTimeValue(value) {
   const sec = parseTimeToSec(value);
   return sec === null ? '' : fmt24(floorToMinuteSec(sec));
+}
+// 저장용: 초까지 보존 ('07:43:27' → '07:43:27', 수동 입력은 ':00').
+// EHR이 준 초 단위를 근무시간 계산에 써야 회사 공식 총계와 일치한다. 표시만 분으로 내림.
+function fmtClock(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return pad(h) + ':' + pad(m) + ':' + pad(s);
+}
+function normalizeClockValue(value) {
+  const sec = parseTimeToSec(value);
+  return sec === null ? '' : fmtClock(sec);
 }
 
 function normalizeStoredTimes() {
@@ -139,8 +151,8 @@ function normalizeStoredTimes() {
     const wk = state.weeks[mondayKey];
     for (const [key] of DAYS) {
       if (!wk[key]) continue;
-      wk[key].in = normalizeTimeValue(wk[key].in);
-      wk[key].out = normalizeTimeValue(wk[key].out);
+      wk[key].in = normalizeClockValue(wk[key].in);
+      wk[key].out = normalizeClockValue(wk[key].out);
       if (mondayKey === ti.mondayKey && key === ti.dayKey) {
         const outS = parseTimeToSec(wk[key].out);
         if (outS !== null && outS > now) wk[key].out = '';
@@ -268,7 +280,9 @@ function estimateCheckouts(wk, s, mondayKey, now) {
 
     const credit = creditSec(ec, s);
     if (credit) fixedTotal += credit;
-    if (dayStr >= todayStr) pending.push({ key, dayStr, cell: ec });
+    // 퇴근 없는 날을 예상 분배 대상에 포함: 오늘·미래는 물론, 과거라도 출근 기록이 있으면(퇴근 누락) 같이 나눈다.
+    const hasIn = parseTimeToSec(ec.in) !== null;
+    if (dayStr >= todayStr || hasIn) pending.push({ key, dayStr, cell: ec });
   });
 
   if (!pending.length) return {};
@@ -406,7 +420,7 @@ function fillInputsFromState() {
   });
   document.querySelectorAll('.cellinput').forEach(inp => {
     const c = wk[inp.dataset.day];
-    inp.value = c[inp.dataset.field] || '';
+    inp.value = normalizeTimeValue(c[inp.dataset.field]);   // 표시는 분 (저장은 초 보존)
   });
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) defaultIn.value = state.settings.defaultIn || '';
@@ -555,9 +569,9 @@ async function refreshEhr(manual) {
     if (idx > 4) continue;
     const wk = weekData(mk);
     const key = DAYS[idx][0];
-    if (recs[dateStr].in) wk[key].in = normalizeTimeValue(recs[dateStr].in);
+    if (recs[dateStr].in) wk[key].in = normalizeClockValue(recs[dateStr].in);
     if (recs[dateStr].out) {
-      const out = normalizeTimeValue(recs[dateStr].out);
+      const out = normalizeClockValue(recs[dateStr].out);
       const outS = parseTimeToSec(out);
       const isToday = dateStr === ymd(new Date());
       if (isToday && outS !== null && outS > nowSec()) wk[key].out = '';

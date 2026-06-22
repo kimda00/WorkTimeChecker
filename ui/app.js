@@ -157,18 +157,12 @@ function normalizeClockValue(value) {
 
 function normalizeStoredTimes() {
   state.settings.defaultIn = normalizeTimeValue(state.settings.defaultIn || defaultState().settings.defaultIn);
-  const ti = todayInfo();
-  const now = nowSec();
   Object.keys(state.weeks || {}).forEach(mondayKey => {
     const wk = state.weeks[mondayKey];
     for (const [key] of DAYS) {
       if (!wk[key]) continue;
       wk[key].in = normalizeClockValue(wk[key].in);
       wk[key].out = normalizeClockValue(wk[key].out);
-      if (mondayKey === ti.mondayKey && key === ti.dayKey) {
-        const outS = parseTimeToSec(wk[key].out);
-        if (outS !== null && outS > now) wk[key].out = '';
-      }
       // 반차의 고정 경계(쉬는 쪽)만 강제. 일하는 쪽은 그대로 둠.
       const fx = halfdayFixed(wk[key].type);
       if (fx) wk[key][fx.field] = normalizeClockValue(fx.value);
@@ -634,8 +628,8 @@ async function refreshEhr(manual) {
       const out = normalizeClockValue(recs[dateStr].out);
       const outS = parseTimeToSec(out);
       const isToday = dateStr === ymd(new Date());
-      if (isToday && outS !== null && outS > nowSec()) wk[key].out = '';
-      else wk[key].out = out;
+      // 오늘인데 EHR 퇴근이 미래(이상치)면 무시하고 기존 입력 유지, 그 외엔 실제값으로 덮어씀
+      if (!(isToday && outS !== null && outS > nowSec())) wk[key].out = out;
     }
   }
   await doSave();

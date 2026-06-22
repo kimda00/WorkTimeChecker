@@ -714,6 +714,8 @@ function updateWeekLabel() {
   const label = (weekOffset === 0 ? '이번 주 · ' : '') +
     (monday.getMonth() + 1) + '/' + monday.getDate() + ' ~ ' + (sun.getMonth() + 1) + '/' + sun.getDate();
   document.getElementById('weekLabel').textContent = label;
+  const todayBtn = document.getElementById('todayBtn');
+  if (todayBtn) todayBtn.disabled = (weekOffset === 0);   // 이번 주면 비활성
 }
 
 function rerenderWeek() {
@@ -733,6 +735,7 @@ async function init() {
 
   document.getElementById('prevWeek').addEventListener('click', () => { weekOffset--; rerenderWeek(); });
   document.getElementById('nextWeek').addEventListener('click', () => { weekOffset++; rerenderWeek(); });
+  document.getElementById('todayBtn').addEventListener('click', () => { weekOffset = 0; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   bindFormulaBar();

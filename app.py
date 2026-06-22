@@ -301,7 +301,7 @@ def main():
         UI,
         js_api=api,
         width=900,
-        height=490,
+        height=530,
         min_size=(720, 450),
     )
     window.events.closing += on_closing

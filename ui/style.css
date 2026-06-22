@@ -75,6 +75,24 @@ html, body {
 .ehrbtn:hover { filter: brightness(1.08); box-shadow: 0 0 14px rgba(63, 224, 197, .25); }
 .ehrbtn:disabled { opacity: .5; cursor: default; filter: none; box-shadow: none; }
 
+.todaybtn {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 7px;
+  height: 28px;
+  padding: 0 11px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+  font-family: inherit;
+  transition: background .12s, border-color .12s, opacity .12s;
+}
+.todaybtn:hover { background: #232a31; border-color: var(--mint-dim); }
+.todaybtn:disabled { opacity: .4; cursor: default; background: var(--panel-2); border-color: var(--line); }
+html[data-theme="excel"] .todaybtn { color: #188038; }
+html[data-theme="excel"] .todaybtn:hover { background: #e8eaed; }
+
 .settingbar {
   display: flex;
   align-items: center;

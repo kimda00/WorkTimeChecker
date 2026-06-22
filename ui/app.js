@@ -4,6 +4,8 @@ const DAYS = [
   ['mon', '월'], ['tue', '화'], ['wed', '수'], ['thu', '목'], ['fri', '금'],
 ];
 const TYPES = ['', '연차', '오전반차', '오후반차', '휴일'];
+// TODO: '출장' 유형 검토(보류) — 근무시간이 사람마다 달라 하루 8h 초과도 가능.
+//   유력안: 출퇴근 자유 입력(EHR도 채움) + 비어 있으면 8h 인정. 확정 후 구현.
 
 let state = null;          // { settings, weeks: { 'YYYY-MM-DD(월요일)': { mon:{type,in,out}, ... } } }
 let weekOffset = 0;        // 0 = 이번 주
@@ -619,7 +621,6 @@ async function refreshEhr(manual) {
   ehrNeedsLogin = false;
   setEhrBtn('새로고침', false);   // 로그인됨 → 다시 누르면 재동기화(refresh)
   const recs = res.records || {};
-  let n = 0;
   for (const dateStr of Object.keys(recs)) {
     const d = new Date(dateStr + 'T00:00:00');
     const mk = ymd(mondayOf(d));
@@ -636,13 +637,12 @@ async function refreshEhr(manual) {
       if (isToday && outS !== null && outS > nowSec()) wk[key].out = '';
       else wk[key].out = out;
     }
-    n++;
   }
   await doSave();
   fillInputsFromState();
   recompute();
   status.className = 'status ok';
-  status.textContent = 'EHR 반영 완료 (' + n + '일)';
+  status.textContent = 'EHR 반영 완료 (최근 2개월)';
 }
 
 async function doEhrLogin() {

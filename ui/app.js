@@ -126,6 +126,15 @@ function weekData(mondayKey) {
   return state.weeks[mondayKey];
 }
 
+// 반차의 '쉬는 쪽' 경계만 13:00으로 고정·잠금. '일하는 쪽'은 자유(직접 입력 + EHR 실제값).
+//  오전반차 = 오전 휴무 → 출근 13:00 고정 / 퇴근은 자유
+//  오후반차 = 오후 휴무 → 퇴근 13:00 고정 / 출근은 자유
+function halfdayFixed(type) {
+  if (type === '오전반차') return { field: 'in', value: '13:00' };
+  if (type === '오후반차') return { field: 'out', value: '13:00' };
+  return null;
+}
+
 // 화면 표시용: 분 단위로 내림 ('07:43:27' → '07:43')
 function normalizeTimeValue(value) {
   const sec = parseTimeToSec(value);
@@ -158,6 +167,9 @@ function normalizeStoredTimes() {
         const outS = parseTimeToSec(wk[key].out);
         if (outS !== null && outS > now) wk[key].out = '';
       }
+      // 반차의 고정 경계(쉬는 쪽)만 강제. 일하는 쪽은 그대로 둠.
+      const fx = halfdayFixed(wk[key].type);
+      if (fx) wk[key][fx.field] = normalizeClockValue(fx.value);
     }
   });
 }
@@ -475,10 +487,12 @@ function applyTypeClass(sel) {
   if (sel.value) sel.classList.add('type-' + sel.value);
 }
 
-// 연차/휴일(종일 비근무)이면 출근/퇴근 입력을 막는다.
+// 연차/휴일은 출근·퇴근 둘 다 잠금. 반차는 '고정 경계'(쉬는 쪽) 1칸만 잠그고 나머지는 입력 허용.
 function applyInputState(day, type) {
-  const off = (type === '연차' || type === '휴일');
+  const bothOff = (type === '연차' || type === '휴일');
+  const fx = halfdayFixed(type);
   document.querySelectorAll('.cellinput[data-day="' + day + '"]').forEach(inp => {
+    const off = bothOff || (fx && inp.dataset.field === fx.field);
     inp.disabled = off;
     inp.classList.toggle('muted', off);
   });
@@ -492,12 +506,12 @@ function onCellChange(e) {
     c.type = el.value;
     applyTypeClass(el);
     applyInputState(el.dataset.day, el.value);
-    // 오전반차 → 출근 13:00 자동 / 오후반차 → 퇴근 13:00 자동
-    if (el.value === '오전반차' || el.value === '오후반차') {
-      const field = el.value === '오전반차' ? 'in' : 'out';
-      c[field] = '13:00';
-      const inp = document.querySelector('.cellinput[data-day="' + el.dataset.day + '"][data-field="' + field + '"]');
-      if (inp) inp.value = c[field];
+    // 반차 → 쉬는 쪽 경계만 13:00 고정 (일하는 쪽은 자유)
+    const fx = halfdayFixed(el.value);
+    if (fx) {
+      c[fx.field] = fx.value;
+      const inp = document.querySelector('.cellinput[data-day="' + el.dataset.day + '"][data-field="' + fx.field + '"]');
+      if (inp) inp.value = fx.value;
     }
   } else {
     const norm = normalizeTimeValue(el.value);
@@ -591,9 +605,9 @@ async function refreshEhr(manual) {
   }
   if (res.status === 'login_required') {
     ehrNeedsLogin = true;
-    setEhrBtn('EHR 로그인', false);
+    setEhrBtn('로그인', false);
     status.className = 'status err';
-    status.textContent = 'EHR 로그인이 필요해요 — ‘EHR 로그인’ 클릭';
+    status.textContent = 'EHR 로그인이 필요해요 — ‘로그인’ 클릭';
     return;
   }
   if (res.status === 'error') {
@@ -603,7 +617,7 @@ async function refreshEhr(manual) {
   }
   // ok — res.records: { 'YYYY-MM-DD': { in, out } } (과거+오늘만, 미래는 미포함)
   ehrNeedsLogin = false;
-  setEhrBtn('로그인', false);
+  setEhrBtn('새로고침', false);   // 로그인됨 → 다시 누르면 재동기화(refresh)
   const recs = res.records || {};
   let n = 0;
   for (const dateStr of Object.keys(recs)) {
@@ -613,8 +627,9 @@ async function refreshEhr(manual) {
     if (idx > 4) continue;
     const wk = weekData(mk);
     const key = DAYS[idx][0];
-    if (recs[dateStr].in) wk[key].in = normalizeClockValue(recs[dateStr].in);
-    if (recs[dateStr].out) {
+    const fx = halfdayFixed(wk[key].type);   // 반차 고정 경계는 EHR로 안 덮음(자유 경계만 채움)
+    if (recs[dateStr].in && !(fx && fx.field === 'in')) wk[key].in = normalizeClockValue(recs[dateStr].in);
+    if (recs[dateStr].out && !(fx && fx.field === 'out')) {
       const out = normalizeClockValue(recs[dateStr].out);
       const outS = parseTimeToSec(out);
       const isToday = dateStr === ymd(new Date());
@@ -653,11 +668,11 @@ async function doEhrLogin() {
   } else if (res && res.status === 'cancelled') {
     status.className = 'status';
     status.textContent = '로그인이 취소됐어요';
-    setEhrBtn('EHR 로그인', false);
+    setEhrBtn('로그인', false);
   } else {
     status.className = 'status err';
     status.textContent = '로그인 오류: ' + ((res && res.message) || '알 수 없음');
-    setEhrBtn('EHR 로그인', false);
+    setEhrBtn('로그인', false);
   }
 }
 

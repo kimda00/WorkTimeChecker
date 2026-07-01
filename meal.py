@@ -17,6 +17,7 @@ mealBoardId(기본 380).
   GET {origin}{img src} -> 이미지 바이트
 """
 import base64
+import datetime
 import json
 import os
 import re
@@ -87,24 +88,48 @@ def _prune_except(keep_name):
         pass
 
 
-def _latest_post(ctx, board, headers):
-    """게시판에서 작성일(createdAt) 최신 글 1개. 일반+공지 목록을 합쳐 최신을 고른다."""
+def _prune_all():
+    """meal 폴더의 모든 파일 삭제(이번 주 글이 없을 때 지난 주 캐시 제거)."""
+    try:
+        for fn in os.listdir(MEAL_DIR):
+            try:
+                os.remove(os.path.join(MEAL_DIR, fn))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _in_this_week(created_at):
+    """작성일(ISO)이 이번 주 범위 [이번주 월요일 00:00, 다음주 월요일) 안인지. 날짜 불명이면 통과."""
+    try:
+        d = datetime.date.fromisoformat((created_at or "")[:10])
+    except Exception:
+        return True
+    today = datetime.date.today()
+    monday = today - datetime.timedelta(days=today.weekday())
+    return monday <= d < monday + datetime.timedelta(days=7)
+
+
+def _list_posts(ctx, board, headers):
+    """일반+공지 목록을 합쳐 작성일 내림차순으로. (posts, list_ok) 반환.
+    list_ok=False 면 목록 조회 자체가 실패(네트워크 등) → 호출부가 캐시를 건드리지 않게 한다."""
     urls = [
         "%s/api/board/%d/posts/classic?page=0&offset=20&sorts=%s" % (ORIGIN, board, LIST_SORT),
         "%s/api/board/%d/posts/classic/notice?page=0&sorts=%s" % (ORIGIN, board, LIST_SORT),
     ]
-    best = None
+    posts, ok = [], False
     for u in urls:
         try:
             r = ctx.request.get(u, headers=headers)
             if not r.ok:
                 continue
-            for post in ((r.json() or {}).get("data") or []):
-                if best is None or (post.get("createdAt") or "") > (best.get("createdAt") or ""):
-                    best = post
+            ok = True
+            posts.extend((r.json() or {}).get("data") or [])
         except Exception:
             continue
-    return best
+    posts.sort(key=lambda p: p.get("createdAt") or "", reverse=True)
+    return posts, ok
 
 
 def load_cache():
@@ -115,6 +140,8 @@ def load_cache():
         img = os.path.join(MEAL_DIR, m.get("file", ""))
         if not (m.get("file") and os.path.exists(img)):
             return {"status": "empty"}
+        if not _in_this_week(m.get("createdAt")):
+            return {"status": "empty"}   # 지난 주 저장본은 표시하지 않음(이번 주 것만)
         return {
             "status": "ok", "cached": True,
             "postId": m.get("postId"), "title": m.get("title"),
@@ -148,10 +175,19 @@ def fetch():
                     return {"status": "login_required",
                             "message": "세션이 만료됐어요. 다시 로그인해 주세요."}
 
-                post = _latest_post(ctx, board, headers)
-                if not post:
-                    return {"status": "empty", "message": "게시판에 글이 없어요.",
+                posts, list_ok = _list_posts(ctx, board, headers)
+                if not list_ok:
+                    return {"status": "error", "message": "게시판 목록 조회 실패",
                             "boardUrl": _board_url(board)}
+                # 이번 주 범위 안의 글만 후보 → 그 중 최신
+                this_week = [p for p in posts if _in_this_week(p.get("createdAt"))]
+                if not this_week:
+                    _prune_all()   # 이번 주 글 없음 → 지난 주 캐시 제거(이번 주 것만 유지)
+                    return {"status": "not_yet",
+                            "message": "아직 이번 주 식단표가 안 올라왔어요.",
+                            "latestCreatedAt": posts[0].get("createdAt") if posts else None,
+                            "boardUrl": _board_url(board)}
+                post = this_week[0]
                 pid = post.get("id")
 
                 dr = ctx.request.get("%s/api/board/%d/post/%d/classic" % (ORIGIN, board, pid),

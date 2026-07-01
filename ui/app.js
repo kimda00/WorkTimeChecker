@@ -688,13 +688,9 @@ function toggleMeal() {
   }
 }
 
-// 최신 글이 이번 주(월요일 00:00 이후)에 올라왔는지. 이 회사는 해당 주 월요일에 그 주 식단을 올린다.
-function mealIsThisWeek(createdAt) {
-  const d = new Date(createdAt);
-  if (isNaN(d.getTime())) return true;   // 날짜 불명 → 그냥 표시
-  return d >= mondayOf(new Date());
-}
+// 이번 주 판정은 백엔드(meal.py)가 작성일 기준으로 하고, 여기선 안내에 최신 글 날짜만 덧붙인다.
 function mealLatestNote(createdAt) {
+  if (!createdAt) return '';
   const d = new Date(createdAt);
   return isNaN(d.getTime()) ? '' : ' (최신 글: ' + (d.getMonth() + 1) + '/' + d.getDate() + ')';
 }
@@ -720,15 +716,12 @@ function renderMeal(res) {
 
   if (!res || res.status === 'empty') { show('저장된 식단이 없어요 — ‘불러오기’를 눌러주세요.'); return; }
   if (res.status === 'login_required') { show('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시 시도하세요.'); return; }
-  if (res.status === 'ok' && res.image) {
-    // 최신 글이 지난 주 것 → 아직 이번 주 식단이 안 올라옴. 옛 이미지 대신 안내(수동 재시도).
-    if (res.createdAt && !mealIsThisWeek(res.createdAt)) {
-      show('아직 이번 주 식단표가 안 올라왔어요 — 잠시 후 ‘불러오기’로 다시 시도해주세요.' + mealLatestNote(res.createdAt));
-      if (res.boardUrl) { origin.hidden = false; origin.dataset.url = res.boardUrl; }
-      return;
-    }
-    img.src = res.image; img.hidden = false; hint.hidden = true;
+  if (res.status === 'not_yet') {
+    show('아직 이번 주 식단표가 안 올라왔어요 — 잠시 후 ‘불러오기’로 다시 시도해주세요.' + mealLatestNote(res.latestCreatedAt));
+    if (res.boardUrl) { origin.hidden = false; origin.dataset.url = res.boardUrl; }
+    return;
   }
+  if (res.status === 'ok' && res.image) { img.src = res.image; img.hidden = false; hint.hidden = true; }
   else if (res.status === 'no_image') { show('본문에 이미지가 없어요 — ‘원본 열기’로 확인하세요.'); }
   else if (res.status === 'error') { show('불러오기 실패: ' + (res.message || '알 수 없음')); }
   else { show('식단을 표시할 수 없어요.'); return; }

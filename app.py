@@ -44,6 +44,7 @@ def data_dir():
 DATA = os.path.join(data_dir(), "data.json")
 UI = os.path.join(resource_dir(), "ui", "index.html")
 EHR_PY = os.path.join(BASE, "ehr.py")
+MEAL_PY = os.path.join(BASE, "meal.py")
 
 # EHR(Playwright) 작업은 콘솔 stdio가 있는 별도 프로세스로 실행한다.
 # pythonw.exe(콘솔 없음)에서 헤드풀 크롬을 직접 spawn 하면 "spawn UNKNOWN"이 나기 때문.
@@ -53,12 +54,12 @@ if _PY.lower().endswith("pythonw.exe"):
 _CREATE_NO_WINDOW = 0x08000000
 
 
-def _run_ehr(cmd, timeout):
-    # exe(frozen): 자기 자신을 재실행해 결과를 임시파일로 받음 (번들엔 별도 ehr.py 없음)
+def _run_pw(cmd, script, flag, timeout):
+    """Playwright 작업(EHR/식단)을 콘솔 stdio 있는 별도 프로세스로 실행하고 JSON 결과를 받는다."""
+    # exe(frozen): 자기 자신을 재실행해 결과를 임시파일로 받음 (번들엔 별도 .py 없음)
     if getattr(sys, "frozen", False):
         import tempfile
-        flag = "--ehr-login" if cmd == "loginjson" else "--ehr-fetch"
-        tf = os.path.join(tempfile.gettempdir(), "worktime_ehr_%d.json" % os.getpid())
+        tf = os.path.join(tempfile.gettempdir(), "worktime_%s_%d.json" % (cmd, os.getpid()))
         try:
             subprocess.run(
                 [sys.executable, flag, tf],
@@ -70,7 +71,7 @@ def _run_ehr(cmd, timeout):
             with open(tf, "r", encoding="utf-8") as f:
                 return json.load(f)
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": "EHR 처리 시간 초과"}
+            return {"status": "error", "message": "처리 시간 초과"}
         except Exception as e:
             return {"status": "error", "message": str(e)}
         finally:
@@ -78,10 +79,10 @@ def _run_ehr(cmd, timeout):
                 os.remove(tf)
             except Exception:
                 pass
-    # 개발(스크립트) 모드: ehr.py 를 별도 프로세스로
+    # 개발(스크립트) 모드: 대상 .py 를 별도 프로세스로
     try:
         proc = subprocess.run(
-            [_PY, EHR_PY, cmd],
+            [_PY, script, cmd],
             cwd=BASE,
             stdin=subprocess.DEVNULL,
             capture_output=True,
@@ -99,9 +100,14 @@ def _run_ehr(cmd, timeout):
         msg = (proc.stderr or out or "출력 없음").strip()
         return {"status": "error", "message": msg[:300]}
     except subprocess.TimeoutExpired:
-        return {"status": "error", "message": "EHR 처리 시간 초과"}
+        return {"status": "error", "message": "처리 시간 초과"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def _run_ehr(cmd, timeout):
+    flag = "--ehr-login" if cmd == "loginjson" else "--ehr-fetch"
+    return _run_pw(cmd, EHR_PY, flag, timeout)
 
 DEFAULT = {
     "settings": {
@@ -156,6 +162,30 @@ class Api:
     def ehr_login(self):
         """헤드풀 브라우저를 열어 EHR(DaouOffice)에 1회 로그인 (별도 프로세스)."""
         return _run_ehr("loginjson", timeout=660)
+
+    def fetch_meal(self):
+        """게시판 최신 주간식단표 조회 (별도 프로세스). 반환에 image(data URI) 포함."""
+        return _run_pw("mealjson", MEAL_PY, "--meal-fetch", timeout=150)
+
+    def load_meal(self):
+        """네트워크 없이 저장된 최신 식단 이미지를 반환(앱 진입 시 즉시 표시)."""
+        try:
+            import meal
+            return meal.load_cache()
+        except Exception as e:
+            return {"status": "empty", "message": str(e)}
+
+    def open_url(self, url):
+        """식단 원본 등 그룹웨어 링크를 기본 브라우저로 연다(그룹웨어 도메인만 허용)."""
+        try:
+            import ehr
+            import webbrowser
+            if url and ehr.ORIGIN and str(url).startswith(ehr.ORIGIN):
+                webbrowser.open(url)
+                return True
+        except Exception:
+            pass
+        return False
 
     def holidays(self, years):
         """한국 공휴일(대체공휴일 포함). 반환: {'YYYY-MM-DD': '이름', ...}"""
@@ -312,10 +342,14 @@ def main():
 
 
 def _maybe_run_ehr_mode():
-    """exe(frozen)에서 _run_ehr 가 자기 자신을 재실행한 경우: GUI 대신 EHR 작업 수행 후 종료."""
-    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login"):
-        import ehr
-        res = ehr.login() if sys.argv[1] == "--ehr-login" else ehr.fetch()
+    """exe(frozen)에서 _run_pw 가 자기 자신을 재실행한 경우: GUI 대신 작업 수행 후 종료."""
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch"):
+        if sys.argv[1] == "--meal-fetch":
+            import meal
+            res = meal.fetch()
+        else:
+            import ehr
+            res = ehr.login() if sys.argv[1] == "--ehr-login" else ehr.fetch()
         try:
             with open(sys.argv[2], "w", encoding="utf-8") as f:
                 json.dump(res, f, ensure_ascii=False)

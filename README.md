@@ -8,7 +8,36 @@
 - 📊 **주 40시간 기준** — 두 줄 요약: `현재 시각 기준` / `예정 포함(입력한 퇴근시간까지)`, 40h 초과 시 빨간 연장(+)
 - 🏖️ **연차 / 반차** — 연차·휴일 8h 인정, 오전/오후 반차(출근·퇴근 13:00 자동 + 4h 인정)
 - 📅 **공휴일 자동** — 한국 공휴일(설날·추석·대체공휴일 포함, 오프라인 `holidays` 라이브러리) 자동 8h 인정
+- 🍱 **주간식단표** — 상단 `식단` 버튼으로 회사 게시판(주간메뉴)의 이번 주 식단표를 앱 안에서 바로 확인 (작성일 최신 1개만 저장, 이전 파일 자동 삭제)
 - 🖥️ **트레이 상주** — 닫으면 트레이로 숨김, Python 없이 도는 단일 exe로 배포
+
+## 주간식단표 보기
+
+사내 그룹웨어 게시판(주간메뉴)에 올라온 이번 주 식단표를 앱에서 바로 확인한다. 별도 로그인은 필요 없으며, EHR 조회에 사용하는 로그인 세션을 그대로 쓴다.
+
+**사용 방법**
+
+1. 상단 오른쪽 `식단` 버튼을 누른다.
+
+   ![근무 화면 — 식단 버튼](docs/screenshot-work.png)
+
+2. `불러오기`를 누르면 게시판에서 이번 주 식단표를 가져와 표시한다. 세로로 긴 표는 스크롤로 확인한다. `원본(게시판) 열기`로 원본 게시글을 브라우저에서 열 수 있다.
+
+   ![식단 화면](docs/screenshot-meal.png)
+
+3. 다시 `식단`(→ `근무`) 버튼을 누르면 근무시간 화면으로 돌아간다.
+
+**이번 주 식단이 아직 없을 때**
+
+식단표는 보통 해당 주 월요일에 게시되며, 늦어지는 경우가 있다. 이번 주 작성 글이 아직 없으면 지난 주 식단표를 보여주지 않고 아래 안내가 표시된다. 잠시 후 `불러오기`로 다시 시도하면 된다.
+
+   ![미게시 안내](docs/screenshot-not-posted.png)
+
+**동작 방식**
+
+- 게시판(`config.json`의 `mealBoardId`, 기본 `380`)에서 **작성일이 이번 주(월~일) 범위에 드는 최신 글**만 대상으로 한다.
+- 내려받은 식단표 이미지는 `%APPDATA%\worktime\meal\`에 **이번 주 것 한 개만** 저장하고 이전 파일은 자동으로 삭제한다.
+- 주가 바뀌면 지난 주 저장본은 화면에 표시되지 않는다.
 
 ## 코드 구조
 | 경로 | 역할 |
@@ -16,6 +45,7 @@
 | `app.py` | pywebview 창 + pystray 트레이 + JS 브리지(저장 / EHR / 공휴일). **exe 진입점** |
 | `ui/index.html` · `ui/style.css` · `ui/app.js` | 그리드 UI와 **모든 시간 계산 로직**(다크+민트 테마) |
 | `ehr.py` | Playwright로 DaouOffice 근태 API를 조회. 로그인 세션은 `.ehr_state.json`에 저장 |
+| `meal.py` | DaouOffice 게시판(주간메뉴 board)에서 최신 글의 식단표 이미지를 조회. EHR 세션(`.ehr_state.json`) 재사용, 이미지는 `%APPDATA%\worktime\meal\`에 최신 1개만 |
 | `build.ps1` · `build.bat` | PyInstaller로 단일 `dist/WorkTime.exe` 빌드 |
 | `requirements.txt` | pywebview, pythonnet, pystray, Pillow, playwright, holidays |
 
@@ -46,5 +76,11 @@ DaouOffice 공통 API를 쓴다:
 ```
 GET /api/user/session                          -> data.id (userId)
 GET /api/ehr/timeline/month?baseDate=&userId=  -> weekList[].dailyList[] (clockInTime/clockOutTime)
+```
+식단표는 게시판(주간메뉴 board) 내부 API를 쓴다 (`config.json` 의 `mealBoardId`, 기본 380):
+```
+GET /api/board/{id}/posts/classic?page=0&offset=20&sorts=sortCriteria+desc,...  -> data[](작성일 최신순)
+GET /api/board/{id}/post/{postId}/classic  -> data.content(본문 HTML, 인라인 <img src="/thumb/attach/original/..">), data.attaches[](PDF 등)
+GET {origin}{img src}  -> 식단표 이미지(PNG)
 ```
 > 회사 보안정책이 PyInstaller 번들 크롬 실행을 막는 경우가 있어, Playwright는 **시스템에 설치된 Chrome→Edge**(`channel`)를 사용한다.

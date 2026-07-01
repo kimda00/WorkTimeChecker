@@ -677,6 +677,101 @@ function ehrButtonClick() {
 
 window.appRefreshEhr = function () { refreshEhr(false); };
 
+/* ---------------- 주간식단표 (게시판) ---------------- */
+let mealMode = false;
+let mealCacheLoaded = false;
+
+function setMealMode(on) {
+  const wrap = document.querySelector('.wrap');
+  if (wrap) wrap.classList.toggle('meal-mode', on);
+  const btn = document.getElementById('mealBtn');
+  if (btn) btn.textContent = on ? '근무' : '식단';
+}
+
+function toggleMeal() {
+  mealMode = !mealMode;
+  setMealMode(mealMode);
+  if (mealMode && !mealCacheLoaded) {
+    mealCacheLoaded = true;
+    loadMealCache();   // 저장된 게 있으면 즉시 표시 (네트워크 X)
+  }
+}
+
+// 이번 주 판정은 백엔드(meal.py)가 작성일 기준으로 하고, 여기선 안내에 최신 글 날짜만 덧붙인다.
+function mealLatestNote(createdAt) {
+  if (!createdAt) return '';
+  const d = new Date(createdAt);
+  return isNaN(d.getTime()) ? '' : ' (최신 글: ' + (d.getMonth() + 1) + '/' + d.getDate() + ')';
+}
+
+function mealCaptionText(res) {
+  let s = res.title || '주간식단표';
+  if (res.createdAt) {
+    const d = new Date(res.createdAt);
+    if (!isNaN(d.getTime())) s += ' · ' + (d.getMonth() + 1) + '/' + d.getDate() + ' 게시';
+  }
+  if (res.cached) s += ' · 저장본';
+  return s;
+}
+
+function renderMeal(res) {
+  const img = document.getElementById('mealImg');
+  const hint = document.getElementById('mealHint');
+  const cap = document.getElementById('mealCaption');
+  const origin = document.getElementById('mealOrigin');
+  cap.textContent = '';
+  origin.hidden = true;
+  const show = msg => { img.hidden = true; hint.hidden = false; hint.textContent = msg; };
+
+  if (!res || res.status === 'empty') { show('저장된 식단이 없어요 — ‘불러오기’를 눌러주세요.'); return; }
+  if (res.status === 'login_required') { show('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시 시도하세요.'); return; }
+  if (res.status === 'not_yet') {
+    show('아직 이번 주 식단표가 안 올라왔어요 — 잠시 후 ‘불러오기’로 다시 시도해주세요.' + mealLatestNote(res.latestCreatedAt));
+    if (res.boardUrl) { origin.hidden = false; origin.dataset.url = res.boardUrl; }
+    return;
+  }
+  if (res.status === 'ok' && res.image) { img.src = res.image; img.hidden = false; hint.hidden = true; }
+  else if (res.status === 'no_image') { show('본문에 이미지가 없어요 — ‘원본 열기’로 확인하세요.'); }
+  else if (res.status === 'error') { show('불러오기 실패: ' + (res.message || '알 수 없음')); }
+  else { show('식단을 표시할 수 없어요.'); return; }
+
+  cap.textContent = mealCaptionText(res);
+  if (res.boardUrl) { origin.hidden = false; origin.dataset.url = res.boardUrl; }
+}
+
+async function loadMealCache() {
+  let res = null;
+  try {
+    if (window.pywebview && pywebview.api && pywebview.api.load_meal) res = await pywebview.api.load_meal();
+  } catch (e) { res = null; }
+  renderMeal(res || { status: 'empty' });
+}
+
+function setMealBusy(busy) {
+  const btn = document.getElementById('mealReload');
+  if (btn) { btn.disabled = busy; btn.textContent = busy ? '불러오는 중…' : '불러오기'; }
+}
+
+async function reloadMeal() {
+  setMealBusy(true);
+  const img = document.getElementById('mealImg');
+  const hint = document.getElementById('mealHint');
+  if (img.hidden) { hint.hidden = false; hint.textContent = '게시판에서 식단표 가져오는 중…'; }
+  let res = null;
+  try {
+    if (window.pywebview && pywebview.api && pywebview.api.fetch_meal) res = await pywebview.api.fetch_meal();
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setMealBusy(false);
+  renderMeal(res);
+}
+
+function openMealOrigin(e) {
+  e.preventDefault();
+  const url = e.currentTarget.dataset.url;
+  if (url && window.pywebview && pywebview.api && pywebview.api.open_url) pywebview.api.open_url(url);
+}
+
 /* ---------------- init ---------------- */
 async function loadState() {
   let loaded = null;
@@ -732,6 +827,9 @@ async function init() {
   document.getElementById('todayBtn').addEventListener('click', () => { weekOffset = 0; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+  document.getElementById('mealBtn').addEventListener('click', toggleMeal);
+  document.getElementById('mealReload').addEventListener('click', reloadMeal);
+  document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);
   bindFormulaBar();
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) {

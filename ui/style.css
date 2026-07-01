@@ -403,3 +403,62 @@ html[data-theme="excel"] .xlformula {
 .xlformula .fb-val { color: #202124; font-variant-numeric: tabular-nums; }
 /* 엑셀 테마 주차 네비 화살표 녹색 */
 html[data-theme="excel"] .navbtn { color: #188038; }
+
+/* =================== 주간식단표 패널 =================== */
+/* 식단 모드: 근무 화면 요소를 숨기고 패널만 표시(같은 창 안에서 화면 전환) */
+#mealPanel { display: none; }
+.wrap.meal-mode #mealPanel { display: block; }
+.wrap.meal-mode .settingbar,
+.wrap.meal-mode table#grid,
+.wrap.meal-mode .sumcap,
+.wrap.meal-mode .summary,
+.wrap.meal-mode #statusLine { display: none; }
+
+.mealbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.mealcaption {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 700;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.mealorigin {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mint);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.mealorigin:hover { text-decoration: underline; }
+.mealbody {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: auto;
+  max-height: calc(100vh - 118px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 8px;
+}
+.mealhint {
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  padding: 44px 12px;
+}
+.mealimg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #ffffff;   /* 투명 PNG 여백을 흰색으로 (다크 테마 가독성) */
+}
+/* display:block 이 [hidden] 기본 규칙을 이겨서 안 숨겨지는 문제 방지 */
+.mealimg[hidden] { display: none; }

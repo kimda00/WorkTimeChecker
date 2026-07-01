@@ -14,6 +14,7 @@ data.json
 data.json.tmp
 .ehr_state.json
 .browser_profile/
+meal/
 
 # 임시 / OS
 _*.png

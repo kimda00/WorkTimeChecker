@@ -442,3 +442,5 @@ html[data-theme="excel"] .navbtn { color: #188038; }
   border-radius: 6px;
   background: #ffffff;   /* 투명 PNG 여백을 흰색으로 (다크 테마 가독성) */
 }
+/* display:block 이 [hidden] 기본 규칙을 이겨서 안 숨겨지는 문제 방지 */
+.mealimg[hidden] { display: none; }

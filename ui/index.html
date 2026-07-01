@@ -23,6 +23,7 @@
       <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
       <button id="todayBtn" class="todaybtn" title="이번 주로 이동">오늘</button>
       <div class="spacer"></div>
+      <button id="mealBtn" class="themebtn" title="이번 주 식단표 보기">식단</button>
       <button id="themeBtn" class="themebtn" title="다크 / 엑셀 테마 전환">엑셀</button>
       <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
     </div>
@@ -75,6 +76,19 @@
     </div>
 
     <div id="statusLine" class="status"></div>
+
+    <div id="mealPanel" class="mealpanel">
+      <div class="mealbar">
+        <button id="mealReload" class="ehrbtn" title="게시판에서 이번 주 식단표 새로 가져오기">불러오기</button>
+        <span id="mealCaption" class="mealcaption"></span>
+        <div class="spacer"></div>
+        <a id="mealOrigin" class="mealorigin" href="#" hidden>원본(게시판) 열기 ↗</a>
+      </div>
+      <div id="mealBody" class="mealbody">
+        <div id="mealHint" class="mealhint">‘불러오기’를 눌러 이번 주 식단표를 가져오세요.</div>
+        <img id="mealImg" class="mealimg" hidden alt="주간식단표" />
+      </div>
+    </div>
   </div>
   <script src="app.js"></script>
 </body>

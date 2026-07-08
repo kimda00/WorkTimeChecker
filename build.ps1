@@ -37,6 +37,7 @@ $pyinstallerArgs = @(
   "--collect-all", "holidays",
   "--hidden-import", "ehr",
   "--hidden-import", "meal",
+  "--hidden-import", "cal",
   "--hidden-import", "pystray._win32",
   "--hidden-import", "clr",
   "--distpath", "$dir\dist",

@@ -794,6 +794,10 @@ let calEvents = [];               // [{id,calendarId,color,type,summary,start,en
 let calSelected = null;           // Set<calendarId> — 체크된(표시할) 캘린더. null=아직 미초기화
 let calLoadedOnce = false;
 let calBoardUrl = null;
+let calFetchTimer = null;         // 월 이동 디바운스 타이머
+let calReqSeq = 0;                // 조회 순번(스테일 결과 폐기용)
+let calInFlight = false;          // 조회 진행 중(브라우저 프로세스 중복 방지)
+let calRefetchWanted = false;     // 진행 중에 들어온 요청 → 끝난 뒤 한 번 더
 
 function calMonthKey(mm) { return mm.y + '-' + pad(mm.m); }
 function calCurrentMonth() { const n = new Date(); return { y: n.getFullYear(), m: n.getMonth() + 1 }; }
@@ -1014,29 +1018,50 @@ function applyCalResult(res) {
 }
 
 async function loadCalCache() {
+  const month = calMonthKey(calMonth);
   let res = null;
   try {
     if (window.pywebview && pywebview.api && pywebview.api.load_calendar) {
-      res = await pywebview.api.load_calendar(calMonthKey(calMonth));
+      res = await pywebview.api.load_calendar(month);
     }
   } catch (e) { res = null; }
-  if (res && res.status === 'ok') applyCalResult(res);
+  // 캐시를 읽는 동안 다른 달로 옮겼으면 반영하지 않음
+  if (res && res.status === 'ok' && month === calMonthKey(calMonth)) applyCalResult(res);
 }
 
+// 월 이동 연타 시 마지막에 멈춘 달만 조회하도록 디바운스.
+function scheduleCalFetch(delay) {
+  if (calFetchTimer) clearTimeout(calFetchTimer);
+  calFetchTimer = setTimeout(() => { calFetchTimer = null; fetchCal(); }, delay);
+}
+
+// 한 번에 하나의 조회만 실행(headless 브라우저 프로세스 중복 방지).
+// 조회 중 다른 요청이 오면 끝난 뒤 한 번 더, 표시 중인 달의 결과만 반영(스테일 폐기).
 async function fetchCal() {
+  if (calInFlight) { calRefetchWanted = true; return; }
+  const month = calMonthKey(calMonth);
+  const seq = ++calReqSeq;
+  calInFlight = true;
   setCalBusy(true);
   if (!calCalendars.length) setCalStatus('캘린더 불러오는 중…', '');
   let res = null;
   try {
     if (window.pywebview && pywebview.api && pywebview.api.fetch_calendar) {
       // 전체 캘린더를 받아오고, 표시 여부는 체크박스로 거른다(재조회 없이 즉시 토글).
-      res = await pywebview.api.fetch_calendar(calMonthKey(calMonth), null);
+      res = await pywebview.api.fetch_calendar(month, null);
     } else {
       res = { status: 'error', message: '데스크톱 앱에서만 가능' };
     }
   } catch (e) { res = { status: 'error', message: String(e) }; }
+  calInFlight = false;
   setCalBusy(false);
+  // 그새 다른 달로 이동했으면 이 결과는 버린다(잘못된 달 표시/깜빡임 방지)
+  if (seq !== calReqSeq || month !== calMonthKey(calMonth)) {
+    if (calRefetchWanted) { calRefetchWanted = false; scheduleCalFetch(0); }
+    return;
+  }
   applyCalResult(res);
+  if (calRefetchWanted) { calRefetchWanted = false; scheduleCalFetch(0); }
 }
 
 function enterCal() {
@@ -1044,7 +1069,8 @@ function enterCal() {
   updateCalLabel();
   if (!calLoadedOnce) {
     calLoadedOnce = true;
-    loadCalCache().then(fetchCal);   // 캐시 즉시 표시 후 최신 조회
+    loadCalCache();          // 캐시 있으면 즉시 표시
+    scheduleCalFetch(0);     // 곧바로 최신 조회
   }
 }
 
@@ -1058,7 +1084,8 @@ function calGoMonth(mm) {
   updateCalLabel();
   calEvents = [];                 // 이전 달 잔상 제거
   renderCalGrid();
-  loadCalCache().then(fetchCal);  // 해당 달 캐시 즉시 → 최신 조회
+  loadCalCache();                 // 해당 달 캐시 있으면 즉시 표시
+  scheduleCalFetch(350);          // 연타가 멈춘 뒤에 한 번만 최신 조회
 }
 
 /* ---------------- init ---------------- */

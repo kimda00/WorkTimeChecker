@@ -45,6 +45,7 @@ DATA = os.path.join(data_dir(), "data.json")
 UI = os.path.join(resource_dir(), "ui", "index.html")
 EHR_PY = os.path.join(BASE, "ehr.py")
 MEAL_PY = os.path.join(BASE, "meal.py")
+CAL_PY = os.path.join(BASE, "cal.py")
 
 # EHR(Playwright) 작업은 콘솔 stdio가 있는 별도 프로세스로 실행한다.
 # pythonw.exe(콘솔 없음)에서 헤드풀 크롬을 직접 spawn 하면 "spawn UNKNOWN"이 나기 때문.
@@ -54,8 +55,13 @@ if _PY.lower().endswith("pythonw.exe"):
 _CREATE_NO_WINDOW = 0x08000000
 
 
-def _run_pw(cmd, script, flag, timeout):
-    """Playwright 작업(EHR/식단)을 콘솔 stdio 있는 별도 프로세스로 실행하고 JSON 결과를 받는다."""
+def _run_pw(cmd, script, flag, timeout, env_extra=None):
+    """Playwright 작업(EHR/식단/캘린더)을 콘솔 stdio 있는 별도 프로세스로 실행하고
+    JSON 결과를 받는다. env_extra 로 추가 파라미터(예: 캘린더 월/선택)를 넘긴다."""
+    env = None
+    if env_extra:
+        env = dict(os.environ)
+        env.update({k: str(v) for k, v in env_extra.items()})
     # exe(frozen): 자기 자신을 재실행해 결과를 임시파일로 받음 (번들엔 별도 .py 없음)
     if getattr(sys, "frozen", False):
         import tempfile
@@ -67,6 +73,7 @@ def _run_pw(cmd, script, flag, timeout):
                 capture_output=True,
                 creationflags=_CREATE_NO_WINDOW,
                 timeout=timeout,
+                env=env,
             )
             with open(tf, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -91,6 +98,7 @@ def _run_pw(cmd, script, flag, timeout):
             errors="replace",
             creationflags=_CREATE_NO_WINDOW,
             timeout=timeout,
+            env=env,
         )
         out = (proc.stdout or "").strip()
         for line in reversed(out.splitlines()):
@@ -172,6 +180,22 @@ class Api:
         try:
             import meal
             return meal.load_cache()
+        except Exception as e:
+            return {"status": "empty", "message": str(e)}
+
+    def fetch_calendar(self, month=None, calendar_ids=None):
+        """해당 월의 캘린더 목록 + 일정 조회 (별도 프로세스).
+        month='YYYY-MM', calendar_ids=[..](없으면 전체). 반환에 calendars/events 포함."""
+        env = {"WT_CAL_MONTH": month or ""}
+        if calendar_ids:
+            env["WT_CAL_IDS"] = ",".join(str(c) for c in calendar_ids)
+        return _run_pw("caljson", CAL_PY, "--cal-fetch", timeout=150, env_extra=env)
+
+    def load_calendar(self, month=None):
+        """네트워크 없이 저장된 해당 월 캐시를 반환(탭 진입 시 즉시 표시)."""
+        try:
+            import cal
+            return cal.load_cache(month)
         except Exception as e:
             return {"status": "empty", "message": str(e)}
 
@@ -343,10 +367,13 @@ def main():
 
 def _maybe_run_ehr_mode():
     """exe(frozen)에서 _run_pw 가 자기 자신을 재실행한 경우: GUI 대신 작업 수행 후 종료."""
-    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch"):
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--cal-fetch"):
         if sys.argv[1] == "--meal-fetch":
             import meal
             res = meal.fetch()
+        elif sys.argv[1] == "--cal-fetch":
+            import cal
+            res = cal.fetch(os.environ.get("WT_CAL_MONTH") or None, cal._ids_from_env())
         else:
             import ehr
             res = ehr.login() if sys.argv[1] == "--ehr-login" else ehr.fetch()

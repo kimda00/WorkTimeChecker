@@ -58,7 +58,7 @@
 | `ui/index.html` · `ui/style.css` · `ui/app.js` | 그리드 UI와 **모든 시간 계산 로직**(다크+민트 테마), 식단·캘린더 화면 |
 | `ehr.py` | Playwright로 DaouOffice 근태 API를 조회. 로그인 세션은 `.ehr_state.json`에 저장 |
 | `meal.py` | DaouOffice 게시판(주간메뉴 board)에서 최신 글의 식단표 이미지를 조회. EHR 세션(`.ehr_state.json`) 재사용, 이미지는 `%APPDATA%\worktime\meal\`에 최신 1개만 |
-| `cal.py` | DaouOffice 캘린더 API로 캘린더 목록 + 월 일정을 조회. EHR 세션 재사용, 월별 캐시는 `%APPDATA%\worktime\calendar\`에 |
+| `cal.py` | DaouOffice 캘린더 API로 캘린더 목록 + 월 일정을 조회. EHR 세션의 **쿠키만 재사용해 순수 HTTP로 조회(브라우저 안 띄움 → 빠름)**, 월별 캐시는 `%APPDATA%\worktime\calendar\`에 |
 | `tools/probe_calendar.py` · `tools/probe_colors.py` | 캘린더 API/색상 팔레트를 실제 브라우저 네트워크 캡처로 발견한 일회성 탐침(재발견용, 배포엔 불필요) |
 | `build.ps1` · `build.bat` | PyInstaller로 단일 `dist/WorkTime.exe` 빌드 |
 | `requirements.txt` | pywebview, pythonnet, pystray, Pillow, playwright, holidays |
@@ -105,5 +105,6 @@ GET /api/calendar/event?timeMin=&timeMax=&includingAttendees=true&calendarIds[]=
      -> data[](일정; type=holiday 가 공휴일/빨간날, timeType=allday|timed)
 ```
 > 캘린더 API/색상 팔레트는 `/app/calendar` 페이지의 실제 네트워크 요청을 캡처해 발견했다 (`tools/probe_calendar.py`, `tools/probe_colors.py`).
+> 캘린더 조회는 근태/식단과 달리 **Playwright 브라우저를 쓰지 않고**, 저장된 세션의 쿠키만 꺼내 `urllib`로 직접 부른다(브라우저 기동 3~5초를 없애 월 이동이 빠르다). 세션 파일은 읽기만 한다.
 
 > 회사 보안정책이 PyInstaller 번들 크롬 실행을 막는 경우가 있어, Playwright는 **시스템에 설치된 Chrome→Edge**(`channel`)를 사용한다.

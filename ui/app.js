@@ -677,21 +677,27 @@ function ehrButtonClick() {
 
 window.appRefreshEhr = function () { refreshEhr(false); };
 
-/* ---------------- 주간식단표 (게시판) ---------------- */
-let mealMode = false;
+/* ---------------- 화면 전환 (근무 / 식단 / 캘린더) ---------------- */
+// 한 창 안에서 근무·식단·캘린더 화면을 서로 배타적으로 전환한다.
+let viewMode = 'work';   // 'work' | 'meal' | 'cal'
 let mealCacheLoaded = false;
 
-function setMealMode(on) {
+function setView(mode) {
+  viewMode = mode;
   const wrap = document.querySelector('.wrap');
-  if (wrap) wrap.classList.toggle('meal-mode', on);
-  const btn = document.getElementById('mealBtn');
-  if (btn) btn.textContent = on ? '근무' : '식단';
+  if (wrap) {
+    wrap.classList.toggle('meal-mode', mode === 'meal');
+    wrap.classList.toggle('cal-mode', mode === 'cal');
+  }
+  const mb = document.getElementById('mealBtn');
+  const cb = document.getElementById('calBtn');
+  if (mb) mb.textContent = mode === 'meal' ? '근무' : '식단';
+  if (cb) cb.textContent = mode === 'cal' ? '근무' : '캘린더';
 }
 
 function toggleMeal() {
-  mealMode = !mealMode;
-  setMealMode(mealMode);
-  if (mealMode && !mealCacheLoaded) {
+  setView(viewMode === 'meal' ? 'work' : 'meal');
+  if (viewMode === 'meal' && !mealCacheLoaded) {
     mealCacheLoaded = true;
     loadMealCache();   // 저장된 게 있으면 즉시 표시 (네트워크 X)
   }
@@ -772,6 +778,289 @@ function openMealOrigin(e) {
   if (url && window.pywebview && pywebview.api && pywebview.api.open_url) pywebview.api.open_url(url);
 }
 
+/* ---------------- 캘린더 (그룹웨어 일정) ---------------- */
+// 다우오피스 캘린더 색상 팔레트(번호->hex). 백엔드 cal.py PALETTE 와 동일 (프론트 CSS .txtcolorN 추출).
+const CAL_PALETTE = {
+  '0': '#a3a3a3', '1': '#905341', '2': '#d06b64', '3': '#d75269', '4': '#fa573c',
+  '5': '#ff7537', '6': '#ffad46', '7': '#42d692', '8': '#16a765', '9': '#7bd148',
+  '10': '#b3dc6c', '11': '#fbe983', '12': '#fad165', '13': '#f691b2', '14': '#cd74e6',
+  '15': '#9a9cff', '16': '#b99aff', '17': '#6691e5', '18': '#9fc6e7',
+};
+const CAL_MAX_CHIPS = 4;          // 하루 셀에 보일 최대 일정 수 (초과 시 '+N')
+
+let calMonth = null;              // {y, m} — 표시 중인 달(1일 기준)
+let calCalendars = [];            // [{id,label,color,type,mine,...}]
+let calEvents = [];               // [{id,calendarId,color,type,summary,start,end,allday,...}]
+let calSelected = null;           // Set<calendarId> — 체크된(표시할) 캘린더. null=아직 미초기화
+let calLoadedOnce = false;
+let calBoardUrl = null;
+
+function calMonthKey(mm) { return mm.y + '-' + pad(mm.m); }
+function calCurrentMonth() { const n = new Date(); return { y: n.getFullYear(), m: n.getMonth() + 1 }; }
+function calShiftMonth(mm, delta) {
+  const d = new Date(mm.y, mm.m - 1 + delta, 1);
+  return { y: d.getFullYear(), m: d.getMonth() + 1 };
+}
+// 색번호 -> hex (텍스트 대비용은 CSS에서 처리)
+function calColor(n) { return CAL_PALETTE[String(n)] || CAL_PALETTE['0']; }
+
+// 일요일 시작 월 그리드 날짜 배열(42/35칸). 백엔드 _grid_range 와 동일 규칙.
+function calGridDates(mm) {
+  const first = new Date(mm.y, mm.m - 1, 1);
+  const start = addDays(first, -first.getDay());          // 직전(당일) 일요일
+  const last = new Date(mm.y, mm.m, 0);                   // 이번 달 말일
+  const end = addDays(last, 6 - last.getDay());           // 직후(당일) 토요일
+  const dates = [];
+  for (let d = new Date(start); d <= end; d = addDays(d, 1)) dates.push(new Date(d));
+  return dates;
+}
+
+// 일정이 해당 날짜(YYYY-MM-DD)에 걸치는지. 시작~종료(둘 다 날짜 기준, 종료 포함).
+function calEventOnDate(ev, dayStr) {
+  const s = (ev.start || '').slice(0, 10);
+  if (!s) return false;
+  let e = (ev.end || '').slice(0, 10) || s;
+  if (e < s) e = s;
+  return dayStr >= s && dayStr <= e;
+}
+
+function calSelectedIds() {
+  return calSelected ? Array.from(calSelected) : calCalendars.map(c => c.id);
+}
+
+// 저장된 선택 상태를 반영해 calSelected 초기화(없으면 전체 선택).
+function calInitSelection() {
+  const saved = state.settings.calSelected;
+  const allIds = calCalendars.map(c => c.id);
+  if (Array.isArray(saved)) {
+    calSelected = new Set(saved.filter(id => allIds.includes(id)));
+  } else {
+    calSelected = new Set(allIds);   // 기본: 모두 표시
+  }
+}
+
+function calPersistSelection() {
+  state.settings.calSelected = calSelectedIds();
+  scheduleSave();
+}
+
+function setCalStatus(msg, cls) {
+  const el = document.getElementById('calStatus');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = 'calstatus' + (cls ? ' ' + cls : '');
+}
+
+function setCalBusy(busy) {
+  const btn = document.getElementById('calReload');
+  if (btn) { btn.disabled = busy; btn.textContent = busy ? '불러오는 중…' : '불러오기'; }
+}
+
+function updateCalLabel() {
+  const el = document.getElementById('calLabel');
+  if (el) el.textContent = calMonth.y + '년 ' + calMonth.m + '월';
+  const today = document.getElementById('calToday');
+  const cur = calCurrentMonth();
+  if (today) today.disabled = (calMonth.y === cur.y && calMonth.m === cur.m);
+}
+
+// 체크박스(캘린더별 표시 토글). 색 점 + 라벨.
+function renderCalLegend() {
+  const box = document.getElementById('calLegend');
+  if (!box) return;
+  box.innerHTML = '';
+  if (!calCalendars.length) return;
+  calCalendars.forEach(c => {
+    const id = 'calchk_' + c.id;
+    const wrap = document.createElement('label');
+    wrap.className = 'callegitem' + (c.type === 'holiday' ? ' holiday' : '');
+    wrap.htmlFor = id;
+
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.id = id;
+    chk.className = 'callegchk';
+    chk.checked = calSelected.has(c.id);
+    chk.addEventListener('change', () => {
+      if (chk.checked) calSelected.add(c.id); else calSelected.delete(c.id);
+      calPersistSelection();
+      renderCalGrid();
+    });
+
+    const dot = document.createElement('span');
+    dot.className = 'callegdot';
+    dot.style.background = (c.type === 'holiday') ? 'var(--red)' : calColor(c.color);
+
+    const txt = document.createElement('span');
+    txt.className = 'calleglabel';
+    txt.textContent = c.label;
+    txt.title = c.label + (c.mine ? '' : (c.ownerName ? ' (' + c.ownerName + ')' : ''));
+
+    wrap.appendChild(chk); wrap.appendChild(dot); wrap.appendChild(txt);
+    box.appendChild(wrap);
+  });
+}
+
+function calChip(ev) {
+  const chip = document.createElement('div');
+  const isHol = ev.type === 'holiday';
+  chip.className = 'calchip' + (isHol ? ' holiday' : (ev.allday ? ' allday' : ''));
+  if (isHol) {
+    chip.textContent = ev.summary;
+  } else if (ev.allday) {
+    chip.style.background = calColor(ev.color);
+    chip.textContent = ev.summary;
+  } else {
+    const dot = document.createElement('span');
+    dot.className = 'calchipdot';
+    dot.style.background = calColor(ev.color);
+    const t = document.createElement('span');
+    t.className = 'calchiptime';
+    t.textContent = (ev.start || '').slice(11, 16);
+    chip.appendChild(dot); chip.appendChild(t);
+    chip.appendChild(document.createTextNode(' ' + ev.summary));
+  }
+  const who = ev.calendarName ? ' · ' + ev.calendarName : '';
+  chip.title = (ev.allday || isHol ? '' : (ev.start || '').slice(11, 16) + ' ') + ev.summary + who;
+  chip.addEventListener('click', () => {
+    if (calBoardUrl && window.pywebview && pywebview.api && pywebview.api.open_url) pywebview.api.open_url(calBoardUrl);
+  });
+  return chip;
+}
+
+function renderCalGrid() {
+  const grid = document.getElementById('calGrid');
+  if (!grid || !calMonth) return;
+  grid.innerHTML = '';
+  const dates = calGridDates(calMonth);
+  grid.style.setProperty('--calrows', String(dates.length / 7));
+  const todayStr = ymd(new Date());
+  const sel = calSelected || new Set(calCalendars.map(c => c.id));
+
+  // 표시할 일정만: 선택된 캘린더 + 그리드 범위
+  const visible = calEvents.filter(ev => sel.has(ev.calendarId));
+
+  dates.forEach(d => {
+    const dayStr = ymd(d);
+    const dow = d.getDay();                       // 0=일 .. 6=토
+    const inMonth = (d.getMonth() + 1 === calMonth.m && d.getFullYear() === calMonth.y);
+
+    const dayEvents = visible.filter(ev => calEventOnDate(ev, dayStr));
+    dayEvents.sort((a, b) => {
+      const ah = a.type === 'holiday' ? 0 : (a.allday ? 1 : 2);
+      const bh = b.type === 'holiday' ? 0 : (b.allday ? 1 : 2);
+      if (ah !== bh) return ah - bh;
+      return (a.start || '').localeCompare(b.start || '');
+    });
+    const isHoliday = dayEvents.some(ev => ev.type === 'holiday');
+
+    const cell = document.createElement('div');
+    cell.className = 'calday';
+    if (!inMonth) cell.classList.add('other');
+    if (dayStr === todayStr) cell.classList.add('today');
+    if (dow === 0 || isHoliday) cell.classList.add('sun');
+    else if (dow === 6) cell.classList.add('sat');
+
+    const num = document.createElement('div');
+    num.className = 'caldaynum';
+    num.textContent = d.getDate();
+    cell.appendChild(num);
+
+    const list = document.createElement('div');
+    list.className = 'caldayevents';
+    const shown = dayEvents.slice(0, CAL_MAX_CHIPS);
+    shown.forEach(ev => list.appendChild(calChip(ev)));
+    if (dayEvents.length > shown.length) {
+      const more = document.createElement('div');
+      more.className = 'calmore';
+      more.textContent = '+' + (dayEvents.length - shown.length) + ' 더';
+      more.addEventListener('click', () => {
+        if (calBoardUrl && window.pywebview && pywebview.api && pywebview.api.open_url) pywebview.api.open_url(calBoardUrl);
+      });
+      list.appendChild(more);
+    }
+    cell.appendChild(list);
+    grid.appendChild(cell);
+  });
+}
+
+function applyCalResult(res) {
+  if (!res) return false;
+  if (res.status === 'login_required') {
+    setCalStatus('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시 시도하세요.', 'err');
+    return false;
+  }
+  if (res.status === 'error') {
+    setCalStatus('불러오기 실패: ' + (res.message || '알 수 없음'), 'err');
+    return false;
+  }
+  if (res.status !== 'ok') return false;
+  const known = new Set(calCalendars.map(c => c.id));
+  calCalendars = res.calendars || [];
+  calEvents = res.events || [];
+  calBoardUrl = res.boardUrl || calBoardUrl;
+  if (calCalendars.length) {
+    if (!calSelected) {
+      calInitSelection();               // 첫 로드: 저장된 선택 or 전체
+    } else {
+      // 이후 로드: 새로 나타난(이전에 없던) 캘린더는 기본 표시로 추가
+      calCalendars.forEach(c => { if (!known.has(c.id)) calSelected.add(c.id); });
+    }
+  }
+  renderCalLegend();
+  renderCalGrid();
+  setCalStatus(res.cached ? '저장본 표시 중…' : '캘린더 반영 완료', res.cached ? '' : 'ok');
+  return true;
+}
+
+async function loadCalCache() {
+  let res = null;
+  try {
+    if (window.pywebview && pywebview.api && pywebview.api.load_calendar) {
+      res = await pywebview.api.load_calendar(calMonthKey(calMonth));
+    }
+  } catch (e) { res = null; }
+  if (res && res.status === 'ok') applyCalResult(res);
+}
+
+async function fetchCal() {
+  setCalBusy(true);
+  if (!calCalendars.length) setCalStatus('캘린더 불러오는 중…', '');
+  let res = null;
+  try {
+    if (window.pywebview && pywebview.api && pywebview.api.fetch_calendar) {
+      // 전체 캘린더를 받아오고, 표시 여부는 체크박스로 거른다(재조회 없이 즉시 토글).
+      res = await pywebview.api.fetch_calendar(calMonthKey(calMonth), null);
+    } else {
+      res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+    }
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setCalBusy(false);
+  applyCalResult(res);
+}
+
+function enterCal() {
+  if (!calMonth) calMonth = calCurrentMonth();
+  updateCalLabel();
+  if (!calLoadedOnce) {
+    calLoadedOnce = true;
+    loadCalCache().then(fetchCal);   // 캐시 즉시 표시 후 최신 조회
+  }
+}
+
+function toggleCal() {
+  setView(viewMode === 'cal' ? 'work' : 'cal');
+  if (viewMode === 'cal') enterCal();
+}
+
+function calGoMonth(mm) {
+  calMonth = mm;
+  updateCalLabel();
+  calEvents = [];                 // 이전 달 잔상 제거
+  renderCalGrid();
+  loadCalCache().then(fetchCal);  // 해당 달 캐시 즉시 → 최신 조회
+}
+
 /* ---------------- init ---------------- */
 async function loadState() {
   let loaded = null;
@@ -830,6 +1119,11 @@ async function init() {
   document.getElementById('mealBtn').addEventListener('click', toggleMeal);
   document.getElementById('mealReload').addEventListener('click', reloadMeal);
   document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);
+  document.getElementById('calBtn').addEventListener('click', toggleCal);
+  document.getElementById('calReload').addEventListener('click', fetchCal);
+  document.getElementById('calPrev').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, -1)));
+  document.getElementById('calNext').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, 1)));
+  document.getElementById('calToday').addEventListener('click', () => calGoMonth(calCurrentMonth()));
   bindFormulaBar();
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) {

@@ -9,6 +9,7 @@
 - 🏖️ **연차 / 반차** — 연차·휴일 8h 인정, 오전/오후 반차(출근·퇴근 13:00 자동 + 4h 인정)
 - 📅 **공휴일 자동** — 한국 공휴일(설날·추석·대체공휴일 포함, 오프라인 `holidays` 라이브러리) 자동 8h 인정
 - 🍱 **주간식단표** — 상단 `식단` 버튼으로 회사 게시판(주간메뉴)의 이번 주 식단표를 앱 안에서 바로 확인 (작성일 최신 1개만 저장, 이전 파일 자동 삭제)
+- 🗓️ **캘린더** — 상단 `캘린더` 버튼으로 그룹웨어 일정을 월 달력으로 확인. **누구 일정을 볼지 캘린더별 체크박스로 토글**(내 일정 · 전사 · 구독한 동료/팀), 공휴일은 **빨간날**로 표시
 - 🖥️ **트레이 상주** — 닫으면 트레이로 숨김, Python 없이 도는 단일 exe로 배포
 
 ## 주간식단표 보기
@@ -39,13 +40,26 @@
 - 내려받은 식단표 이미지는 `%APPDATA%\worktime\meal\`에 **이번 주 것 한 개만** 저장하고 이전 파일은 자동으로 삭제한다.
 - 주가 바뀌면 지난 주 저장본은 화면에 표시되지 않는다.
 
+## 캘린더 보기
+
+상단 `캘린더` 버튼을 누르면 그룹웨어 캘린더 일정을 **월 달력**으로 보여준다. 별도 로그인 없이 EHR 세션(`.ehr_state.json`)을 그대로 쓴다.
+
+- **누구 일정까지 볼지 체크박스로 토글** — 상단 범례에 캘린더별 체크박스(내 일정 · 전사일정 · 휴일 + 내가 구독한 동료/팀 캘린더)가 뜬다. 체크를 끄면 그 캘린더 일정만 즉시 숨긴다(재조회 없음). 선택 상태는 저장돼 다음에도 유지된다.
+- **빨간날(공휴일)** — 그룹웨어 휴일 캘린더의 공휴일을 빨간색으로 표시하고, 일요일은 빨강·토요일은 파랑으로 구분한다.
+- **월 이동** — `◀ / ▶`로 앞뒤 달, `오늘`로 이번 달. 각 달은 조회 결과를 캐시해 다음 진입 시 즉시 표시한다.
+- 일정 칩을 누르면 원본 그룹웨어 캘린더가 기본 브라우저로 열린다.
+
+동작 방식: `/api/calendar/user/{userId}/calendar`(내/전사/휴일) + `/api/calendar/feed`(구독)로 캘린더 목록을, `/api/calendar/event`로 해당 월(일요일 시작 그리드 범위)의 일정을 받아온다. 표시 여부(체크박스)는 프론트에서 거른다.
+
 ## 코드 구조
 | 경로 | 역할 |
 |---|---|
-| `app.py` | pywebview 창 + pystray 트레이 + JS 브리지(저장 / EHR / 공휴일). **exe 진입점** |
-| `ui/index.html` · `ui/style.css` · `ui/app.js` | 그리드 UI와 **모든 시간 계산 로직**(다크+민트 테마) |
+| `app.py` | pywebview 창 + pystray 트레이 + JS 브리지(저장 / EHR / 식단 / 캘린더 / 공휴일). **exe 진입점** |
+| `ui/index.html` · `ui/style.css` · `ui/app.js` | 그리드 UI와 **모든 시간 계산 로직**(다크+민트 테마), 식단·캘린더 화면 |
 | `ehr.py` | Playwright로 DaouOffice 근태 API를 조회. 로그인 세션은 `.ehr_state.json`에 저장 |
 | `meal.py` | DaouOffice 게시판(주간메뉴 board)에서 최신 글의 식단표 이미지를 조회. EHR 세션(`.ehr_state.json`) 재사용, 이미지는 `%APPDATA%\worktime\meal\`에 최신 1개만 |
+| `cal.py` | DaouOffice 캘린더 API로 캘린더 목록 + 월 일정을 조회. EHR 세션 재사용, 월별 캐시는 `%APPDATA%\worktime\calendar\`에 |
+| `tools/probe_calendar.py` · `tools/probe_colors.py` | 캘린더 API/색상 팔레트를 실제 브라우저 네트워크 캡처로 발견한 일회성 탐침(재발견용, 배포엔 불필요) |
 | `build.ps1` · `build.bat` | PyInstaller로 단일 `dist/WorkTime.exe` 빌드 |
 | `requirements.txt` | pywebview, pythonnet, pystray, Pillow, playwright, holidays |
 
@@ -83,4 +97,13 @@ GET /api/board/{id}/posts/classic?page=0&offset=20&sorts=sortCriteria+desc,...  
 GET /api/board/{id}/post/{postId}/classic  -> data.content(본문 HTML, 인라인 <img src="/thumb/attach/original/..">), data.attaches[](PDF 등)
 GET {origin}{img src}  -> 식단표 이미지(PNG)
 ```
+캘린더는 캘린더 API를 쓴다:
+```
+GET /api/calendar/user/{userId}/calendar        -> data[](내 일정·전사·휴일 캘린더)
+GET /api/calendar/feed?sort=sequence+asc        -> data[].calendar(내가 구독한 동료/팀 캘린더)
+GET /api/calendar/event?timeMin=&timeMax=&includingAttendees=true&calendarIds[]=..
+     -> data[](일정; type=holiday 가 공휴일/빨간날, timeType=allday|timed)
+```
+> 캘린더 API/색상 팔레트는 `/app/calendar` 페이지의 실제 네트워크 요청을 캡처해 발견했다 (`tools/probe_calendar.py`, `tools/probe_colors.py`).
+
 > 회사 보안정책이 PyInstaller 번들 크롬 실행을 막는 경우가 있어, Playwright는 **시스템에 설치된 Chrome→Edge**(`channel`)를 사용한다.

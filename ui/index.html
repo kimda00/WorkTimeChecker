@@ -23,6 +23,7 @@
       <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
       <button id="todayBtn" class="todaybtn" title="이번 주로 이동">오늘</button>
       <div class="spacer"></div>
+      <button id="calBtn" class="themebtn" title="그룹웨어 캘린더 일정 보기">캘린더</button>
       <button id="mealBtn" class="themebtn" title="이번 주 식단표 보기">식단</button>
       <button id="themeBtn" class="themebtn" title="다크 / 엑셀 테마 전환">엑셀</button>
       <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
@@ -87,6 +88,26 @@
       <div id="mealBody" class="mealbody">
         <div id="mealHint" class="mealhint">‘불러오기’를 눌러 이번 주 식단표를 가져오세요.</div>
         <img id="mealImg" class="mealimg" hidden alt="주간식단표" />
+      </div>
+    </div>
+
+    <div id="calPanel" class="calpanel">
+      <div class="calbar">
+        <button id="calPrev" class="navbtn" title="이전 달">◀</button>
+        <div id="calLabel" class="callabel">이번 달</div>
+        <button id="calNext" class="navbtn" title="다음 달">▶</button>
+        <button id="calToday" class="todaybtn" title="이번 달로 이동">오늘</button>
+        <div class="spacer"></div>
+        <span id="calStatus" class="calstatus"></span>
+        <button id="calReload" class="ehrbtn" title="캘린더 새로 불러오기">불러오기</button>
+      </div>
+      <div id="calLegend" class="callegend"></div>
+      <div id="calGridWrap" class="calgridwrap">
+        <div class="calweekhead">
+          <div class="cwh sun">일</div><div class="cwh">월</div><div class="cwh">화</div>
+          <div class="cwh">수</div><div class="cwh">목</div><div class="cwh">금</div><div class="cwh sat">토</div>
+        </div>
+        <div id="calGrid" class="calgrid"></div>
       </div>
     </div>
   </div>

@@ -570,9 +570,9 @@ def main():
         "근태",
         UI,
         js_api=api,
-        width=900,
+        width=992,
         height=530,
-        min_size=(720, 450),
+        min_size=(812, 450),
     )
     window.events.closing += on_closing
     threading.Thread(target=serve_single_instance, args=(lock,), daemon=True).start()

@@ -16,6 +16,32 @@
     <span class="fb-fx">fx</span>
     <span id="fbVal" class="fb-val"></span>
   </div>
+  <div class="layout">
+  <nav id="sideNav" class="sidenav" aria-label="화면 전환">
+    <button class="navitem active" data-view="work" title="주간 근무시간 기록">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span>근태</span>
+    </button>
+    <button class="navitem" data-view="meal" title="이번 주 식단표">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3v5a3 3 0 0 0 6 0V3"/><path d="M8 3v18"/><path d="M17 3c-1.6 2-2.5 4-2.5 7H19c0-3-.4-5-2-7z"/><path d="M17 10v11"/></svg>
+      <span>식단</span>
+    </button>
+    <button class="navitem" data-view="cal" title="그룹웨어 캘린더 일정">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>
+      <span>캘린더</span>
+    </button>
+    <button class="navitem" data-view="ttree" title="TTree 휴가/출장 신청 및 현황">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+      <span>휴가·출장</span>
+    </button>
+    <button class="navitem" data-view="approval" title="지출결의서 기안 도우미">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h9l5 5v15H6z"/><path d="M15 2v5h5M9 13h6M9 17h6"/></svg>
+      <span>결재</span>
+    </button>
+    <div class="navspacer"></div>
+    <button id="themeBtn" class="themebtn navwide" title="다크 / 엑셀 테마 전환">엑셀</button>
+    <button id="ehrBtn" class="ehrbtn navwide" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
+  </nav>
   <div class="wrap">
     <div class="topbar">
       <div id="weekNav" class="weeknav">
@@ -24,13 +50,6 @@
         <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
         <button id="todayBtn" class="todaybtn" title="이번 주로 이동">오늘</button>
       </div>
-      <div class="spacer"></div>
-      <button id="calBtn" class="themebtn" title="그룹웨어 캘린더 일정 보기">캘린더</button>
-      <button id="mealBtn" class="themebtn" title="이번 주 식단표 보기">식단</button>
-      <button id="ttreeBtn" class="themebtn" title="TTree 휴가/출장 신청 및 현황">TTree</button>
-      <button id="approvalBtn" class="themebtn" title="지출결의서 기안 도우미">결재</button>
-      <button id="themeBtn" class="themebtn" title="다크 / 엑셀 테마 전환">엑셀</button>
-      <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
     </div>
 
     <div class="settingbar">
@@ -128,7 +147,6 @@
         <section class="ttree-modal" aria-label="TTree 신청">
           <div class="ttree-modal-head">
             <strong id="ttreeTitle">휴가 신청</strong>
-            <button id="ttreeClose" class="ttree-close" title="닫기">×</button>
           </div>
 
           <div class="ttree-modal-body">
@@ -241,6 +259,7 @@
         </div>
       </div>
     </div>
+  </div>
   </div>
   <script src="app.js"></script>
 </body>

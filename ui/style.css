@@ -29,7 +29,70 @@ html, body {
   -webkit-user-select: none;
 }
 
-.wrap { padding: 12px 14px 14px; }
+/* ---- 레이아웃: 좌측 사이드바 + 본문 ---- */
+/* 앱 셸: 창 전체를 차지하고 본문(.wrap)만 스크롤 → 사이드바(하단 로그인 포함)는 항상 보인다 */
+body { overflow: hidden; }
+.layout {
+  display: flex;
+  align-items: stretch;
+  height: 100vh;
+}
+html[data-theme="excel"] .layout { height: calc(100vh - 58px); } /* 엑셀 크롬(파일바+수식줄) 높이 제외 */
+
+.sidenav {
+  flex: 0 0 92px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 8px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.navitem {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 2px 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .2px;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.navitem:hover { background: var(--panel-2); color: var(--text); }
+.navitem.active { background: var(--mint-deep); color: var(--mint); }
+.navitem.active::before {
+  content: "";
+  position: absolute;
+  left: -8px;                      /* 사이드바 padding 만큼 왼쪽 끝에 붙인다 */
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--mint);
+}
+.navitem svg { display: block; }
+.navitem span { white-space: nowrap; }
+.navspacer { flex: 1; }
+.navwide { width: 100%; }
+.sidenav .ehrbtn { padding: 6px 0; }
+html[data-theme="excel"] .sidenav { background: #f8f9fa; }
+html[data-theme="excel"] .navitem:hover { background: #e8eaed; }
+
+.wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 12px 14px 14px;
+  overflow-y: auto;
+}
 
 /* ---- top bar ---- */
 .topbar {
@@ -43,9 +106,11 @@ html, body {
   align-items: center;
   gap: 8px;
 }
-/* 근무 화면의 주 이동 컨트롤은 식단·캘린더 모드에선 의미 없으니 숨긴다 */
-.wrap.meal-mode .weeknav,
-.wrap.cal-mode .weeknav { display: none; }
+/* 상단바(주 이동)는 근태 화면 전용 — 다른 탭에선 숨긴다 */
+.wrap.meal-mode .topbar,
+.wrap.cal-mode .topbar,
+.wrap.ttree-mode .topbar,
+.wrap.approval-mode .topbar { display: none; }
 .navbtn {
   border: 1px solid var(--line);
   background: var(--panel-2);
@@ -704,172 +769,146 @@ html[data-theme="excel"] .calchip { color: #202124; }
 html[data-theme="excel"] .calchip.allday { color: #10201d; }
 
 /* =================== TTree 휴가/출장 패널 =================== */
+/* 예전엔 TTree 사이트의 흰 모달을 그대로 흉내냈지만, 이제 앱 테마 변수 기반으로 통일한다. */
 #ttreePanel { display: none; }
 .wrap.ttree-mode #ttreePanel { display: block; }
-.wrap.ttree-mode .topbar,
 .wrap.ttree-mode .settingbar,
 .wrap.ttree-mode table#grid,
 .wrap.ttree-mode .sumcap,
 .wrap.ttree-mode .summary,
-.wrap.ttree-mode #statusLine,
-.wrap.ttree-mode #mealPanel { display: none; }
-.wrap.ttree-mode {
-  padding: 0;
-  background: #777;
-  min-height: 100vh;
-}
+.wrap.ttree-mode #statusLine { display: none; }
 
 .ttree-shell {
   display: grid;
-  grid-template-columns: minmax(430px, 478px) minmax(310px, 1fr);
-  gap: 14px;
+  grid-template-columns: minmax(400px, 460px) minmax(300px, 1fr);
+  gap: 10px;
   align-items: start;
-  padding: 0 14px 14px;
 }
 .ttree-modal,
 .ttree-status-panel {
-  background: #fff;
-  color: #4b4f54;
-  border: 0;
-  border-radius: 0;
-  box-shadow: 0 12px 26px rgba(0, 0, 0, .24);
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
   overflow: hidden;
   min-width: 0;
 }
 .ttree-modal-head {
-  height: 56px;
+  height: 38px;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 20px;
-  background: #062d7f;
-  color: #fff;
+  padding: 0 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--mint);
 }
 .ttree-modal-head strong {
-  font-size: 17px;
-  font-weight: 700;
-  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .2px;
 }
-.ttree-close {
-  margin-left: auto;
-  width: 22px;
-  height: 22px;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: #fff;
-  cursor: pointer;
-  font-size: 22px;
-  line-height: 20px;
-  font-weight: 400;
-}
-.ttree-close:hover { background: rgba(255, 255, 255, .14); }
 .ttree-modal-body {
-  padding: 18px 16px 14px;
-  max-height: calc(100vh - 158px);
+  padding: 12px 12px 10px;
+  max-height: calc(100vh - 130px);
   overflow: auto;
 }
 .ttree-section-title {
-  margin: 0 0 10px;
-  color: #4b4f54;
-  font-size: 14px;
+  margin: 0 0 9px;
+  color: var(--mint);
+  font-size: 12px;
   font-weight: 800;
+  letter-spacing: .2px;
 }
-.ttree-request-title { margin-top: 24px; }
+.ttree-section-title::before { content: "▸ "; color: var(--mint-dim); }
+.ttree-request-title { margin-top: 18px; }
 .ttree-field-row,
 .ttree-form label {
   display: grid;
-  grid-template-columns: 182px minmax(0, 1fr);
+  grid-template-columns: 108px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 32px;
   margin: 0 0 5px;
-  color: #666b70;
-  font-size: 14px;
-  font-weight: 500;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
-.ttree-approver-row { align-items: start; min-height: 28px; }
+.ttree-approver-row { align-items: start; min-height: 26px; }
 .ttree-form { display: block; }
 .ttree-form[hidden] { display: none; }
 .ttree-input,
 .ttree-select,
 .ttree-textarea {
   width: 100%;
-  border: 1px solid #d6dee2;
-  border-radius: 3px;
-  background: #fff;
-  color: #666b70;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12.5px;
   outline: none;
   box-shadow: none;
 }
 .ttree-select {
-  height: 26px;
-  padding: 0 30px 0 10px;
+  height: 28px;
+  padding: 0 26px 0 9px;
 }
 .ttree-input {
-  height: 29px;
-  padding: 0 8px;
+  height: 28px;
+  padding: 0 9px;
 }
-.ttree-input[type="date"],
 .ttree-input:disabled {
-  border-width: 0 0 1px;
-  border-color: #d4dcdf;
-  border-style: dashed;
-  border-radius: 0;
-  background: #fff;
-  color: #666b70;
-  opacity: 1;
+  opacity: .45;
+  cursor: default;
 }
 .ttree-textarea {
-  min-height: 60px;
-  padding: 7px 8px;
+  min-height: 58px;
+  padding: 7px 9px;
   resize: vertical;
   user-select: text;
   -webkit-user-select: text;
 }
 .ttree-input::placeholder,
-.ttree-textarea::placeholder { color: #8a949b; }
+.ttree-textarea::placeholder { color: #4a555d; }
 .ttree-input:focus,
 .ttree-select:focus,
 .ttree-textarea:focus {
-  border-color: #8eb5d0;
-  box-shadow: 0 0 0 1px rgba(6, 45, 127, .08);
+  border-color: var(--mint);
+  box-shadow: 0 0 0 1px rgba(63, 224, 197, .35);
 }
 .ttree-approval {
-  min-height: 22px;
-  padding-top: 2px;
-  color: #555b60;
-  font-size: 13px;
-  text-align: right;
+  min-height: 20px;
+  padding-top: 4px;
+  color: var(--text);
+  font-size: 12px;
   line-height: 1.5;
 }
 .ttree-approval::before {
   content: "•";
-  margin-right: 14px;
-  color: #596067;
+  margin-right: 8px;
+  color: var(--mint-dim);
 }
 .ttree-confirm {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 14px 0 8px 182px;
-  color: #f15b50;
+  margin: 12px 0 6px 118px;
+  color: var(--red);
   font-size: 12px;
   font-weight: 700;
 }
-.ttree-confirm input { width: 14px; height: 14px; }
+.ttree-confirm input { width: 14px; height: 14px; accent-color: var(--mint); }
 .ttree-preview {
   display: none;
-  margin: 10px 0 0 182px;
+  margin: 8px 0 0 118px;
   max-height: 116px;
   overflow: auto;
-  padding: 8px;
-  border: 1px solid #dbe4e8;
-  border-radius: 3px;
-  background: #f8fafb;
-  color: #34404a;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
   font-size: 11px;
   user-select: text;
   -webkit-user-select: text;
@@ -878,114 +917,108 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
 .ttree-preview:not(:empty) { display: block; }
 .ttree-modal-foot {
   display: flex;
-  justify-content: center;
-  gap: 4px;
-  padding: 14px 16px;
-  background: #f4f5f6;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
 }
 .ttree-submit-btn,
 .ttree-cancel-btn,
 .ttree-soft-btn {
-  height: 34px;
+  height: 30px;
   min-width: 58px;
-  border: 0;
-  border-radius: 4px;
-  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 14px;
   font-family: inherit;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
   cursor: pointer;
+  background: var(--panel-2);
+  color: var(--text);
+  transition: background .12s, border-color .12s, filter .12s;
 }
 .ttree-submit-btn {
-  background: #e8f8d9;
-  color: #28732e;
+  border-color: var(--mint);
+  background: linear-gradient(180deg, #3fe0c5, #2bb89f);
+  color: #04241e;
+  font-weight: 800;
 }
-.ttree-cancel-btn {
-  background: #e8eeee;
-  color: #202426;
-}
-.ttree-soft-btn {
-  height: 30px;
-  min-width: 0;
-  background: #073281;
-  color: #fff;
-  font-size: 12px;
-}
-.ttree-submit-btn:hover,
+.ttree-submit-btn:hover { filter: brightness(1.08); box-shadow: 0 0 14px rgba(63, 224, 197, .25); }
 .ttree-cancel-btn:hover,
-.ttree-soft-btn:hover { filter: brightness(.97); }
+.ttree-soft-btn:hover { background: #232a31; border-color: var(--mint-dim); }
+html[data-theme="excel"] .ttree-cancel-btn:hover,
+html[data-theme="excel"] .ttree-soft-btn:hover { background: #e8eaed; }
+html[data-theme="excel"] .ttree-submit-btn { background: #188038; border-color: #188038; color: #fff; }
 .ttree-submit-btn:disabled,
 .ttree-cancel-btn:disabled,
 .ttree-soft-btn:disabled {
-  opacity: .55;
+  opacity: .5;
   cursor: default;
+  filter: none;
+  box-shadow: none;
 }
 
 .ttree-status-panel { min-height: 360px; }
-.ttree-status-head { height: 48px; }
 .ttree-caption {
   margin-left: auto;
   max-width: 210px;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 12px;
-  color: rgba(255, 255, 255, .76);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
 }
 .ttree-status-actions {
   display: flex;
   gap: 6px;
   padding: 10px 12px 6px;
-  background: #fff;
-}
-.ttree-status-actions .ttree-soft-btn {
-  background: #eef3f8;
-  color: #0a337f;
-  border: 1px solid #cfdce7;
 }
 .ttree-message {
   min-height: 18px;
   padding: 0 13px 6px;
-  color: #7a838a;
+  color: var(--muted);
   font-size: 12px;
   text-align: left;
 }
-.ttree-message.err { color: #e24f44; }
-.ttree-message.ok { color: #247a31; }
+.ttree-message.err { color: var(--red); }
+.ttree-message.ok { color: var(--mint); }
 .ttree-list-wrap {
-  max-height: calc(100vh - 160px);
+  max-height: calc(100vh - 168px);
   overflow: auto;
   padding: 0 12px 12px;
 }
 .ttree-status-range {
   margin: 2px 0 8px;
-  color: #8a949b;
+  color: var(--muted);
   font-size: 11px;
   text-align: right;
 }
 .ttree-list-wrap h4 {
   margin: 12px 0 6px;
-  color: #4b4f54;
-  font-size: 13px;
+  color: var(--mint);
+  font-size: 12px;
   font-weight: 800;
 }
+.ttree-list-wrap h4::before { content: "▸ "; color: var(--mint-dim); }
 .ttree-list { display: grid; gap: 6px; }
 .ttree-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  border: 1px solid #e2e8ec;
-  border-radius: 4px;
-  background: #fbfcfd;
-  padding: 8px;
-  min-height: 52px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-2);
+  padding: 8px 10px;
+  min-height: 50px;
 }
 .ttree-row-main { min-width: 0; }
 .ttree-row-main strong {
   display: block;
-  color: #4b4f54;
-  font-size: 13px;
+  color: var(--text);
+  font-size: 12.5px;
   margin-bottom: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -993,8 +1026,8 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
 }
 .ttree-row-main span {
   display: block;
-  color: #7a838a;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 11.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1003,44 +1036,38 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 62px;
-  height: 24px;
+  min-width: 56px;
+  height: 22px;
   padding: 0 8px;
-  border-radius: 3px;
+  border-radius: 6px;
   font-size: 11px;
   font-weight: 800;
   white-space: nowrap;
 }
-.ttree-badge.pending { color: #fff; background: #073281; }
-.ttree-badge.ok { color: #fff; background: #278641; }
-.ttree-badge.deny { color: #fff; background: #d84f43; }
-.ttree-badge.cancel { color: #fff; background: #8a949b; }
+.ttree-badge.pending { color: #6ea8ff; background: rgba(110, 168, 255, .14); }
+.ttree-badge.ok { color: var(--mint); background: rgba(63, 224, 197, .14); }
+.ttree-badge.deny { color: var(--red); background: rgba(255, 107, 94, .14); }
+.ttree-badge.cancel { color: var(--muted); background: rgba(125, 136, 147, .16); }
+html[data-theme="excel"] .ttree-badge.pending { color: #1a73e8; background: rgba(26, 115, 232, .10); }
+html[data-theme="excel"] .ttree-badge.ok { color: #188038; background: rgba(24, 128, 56, .10); }
+html[data-theme="excel"] .ttree-badge.deny { color: #d93025; background: rgba(217, 48, 37, .10); }
 .ttree-empty {
-  border: 1px dashed #dbe4e8;
-  border-radius: 4px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
   padding: 18px 10px;
-  color: #8a949b;
+  color: var(--muted);
   font-size: 12px;
   text-align: center;
 }
-html[data-theme="excel"] .wrap.ttree-mode { background: #777; }
-html[data-theme="excel"] .ttree-modal,
-html[data-theme="excel"] .ttree-status-panel { background: #fff; color: #4b4f54; }
 
 @media (max-width: 860px) {
-  .ttree-shell { grid-template-columns: 1fr; padding: 0 8px 10px; }
-  .ttree-field-row,
-  .ttree-form label { grid-template-columns: 118px minmax(0, 1fr); }
-  .ttree-confirm,
-  .ttree-preview { margin-left: 118px; }
+  .ttree-shell { grid-template-columns: 1fr; }
 }
 @media (max-width: 520px) {
   .ttree-field-row,
-  .ttree-form label { grid-template-columns: 96px minmax(0, 1fr); font-size: 13px; }
-  .ttree-modal-head { padding: 0 14px; }
-  .ttree-modal-body { padding: 16px 10px 12px; }
+  .ttree-form label { grid-template-columns: 90px minmax(0, 1fr); }
   .ttree-confirm,
-  .ttree-preview { margin-left: 96px; }
+  .ttree-preview { margin-left: 100px; }
 }
 
 /* =================== 지출결의서 결재 도우미 패널 =================== */

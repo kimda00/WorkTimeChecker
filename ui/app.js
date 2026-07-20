@@ -700,21 +700,26 @@ function setView(mode) {
     wrap.classList.toggle('ttree-mode', mode === 'ttree');
     wrap.classList.toggle('approval-mode', mode === 'approval');
   }
-  const mb = document.getElementById('mealBtn');
-  const cb = document.getElementById('calBtn');
-  const tb = document.getElementById('ttreeBtn');
-  const ab = document.getElementById('approvalBtn');
-  if (mb) mb.textContent = mode === 'meal' ? '근무' : '식단';
-  if (cb) cb.textContent = mode === 'cal' ? '근무' : '캘린더';
-  if (tb) tb.textContent = mode === 'ttree' ? '근무' : 'TTree';
-  if (ab) ab.textContent = mode === 'approval' ? '근무' : '결재';
+  document.querySelectorAll('#sideNav .navitem').forEach(b =>
+    b.classList.toggle('active', b.dataset.view === mode));
 }
 
-function toggleMeal() {
-  setView(viewMode === 'meal' ? 'work' : 'meal');
-  if (viewMode === 'meal' && !mealCacheLoaded) {
+// 사이드바 탭 선택. 화면 전환 + 각 화면의 최초 진입/재진입 훅을 여기서 처리한다.
+function selectView(mode) {
+  if (mode === viewMode) return;
+  setView(mode);
+  if (mode === 'meal' && !mealCacheLoaded) {
     mealCacheLoaded = true;
     loadMealCache();   // 저장된 게 있으면 즉시 표시 (네트워크 X)
+  } else if (mode === 'cal') {
+    enterCal();
+  } else if (mode === 'ttree') {
+    setTtreeDefaults();
+    if (!ttreeLookupsLoaded) loadTtreeLookups();
+    loadTtreeStatus();
+  } else if (mode === 'approval') {
+    if (!approvalInit) { approvalInit = true; initApprovalPanel(); }
+    refreshApprovalSheet();
   }
 }
 
@@ -1113,10 +1118,6 @@ function enterCal() {
   }
 }
 
-function toggleCal() {
-  setView(viewMode === 'cal' ? 'work' : 'cal');
-  if (viewMode === 'cal') enterCal();
-}
 
 function calGoMonth(mm) {
   calMonth = mm;
@@ -1147,18 +1148,6 @@ function setTtreeBusy(busy) {
     const el = document.getElementById(id);
     if (el) el.disabled = busy;
   });
-}
-function setTtreeMode(on) {
-  setView(on ? 'ttree' : 'work');
-}
-function toggleTtree() {
-  const opening = viewMode !== 'ttree';
-  setTtreeMode(opening);
-  if (opening) {
-    setTtreeDefaults();
-    if (!ttreeLookupsLoaded) loadTtreeLookups();
-    loadTtreeStatus();
-  }
 }
 function todayYmdInput() { return ymd(new Date()); }
 function compactTimeForTtree(v) {
@@ -1359,7 +1348,7 @@ function applyTtreeKind() {
   applyTtreeBsrpRange();
 }
 function closeTtreePanel() {
-  setTtreeMode(false);
+  selectView('work');
 }
 function applyTtreeBsrpRange() {
   const range = document.getElementById('ttreeBsrpRange')?.value || 'DAY';
@@ -1522,16 +1511,6 @@ let approvalInit = false;
 let approvalPayday = null;
 let approvalPaySrc = '';
 
-function setApprovalMode(on) {
-  setView(on ? 'approval' : 'work');
-}
-
-function toggleApproval() {
-  const opening = viewMode !== 'approval';
-  setApprovalMode(opening);
-  if (opening && !approvalInit) { approvalInit = true; initApprovalPanel(); }
-  if (opening) refreshApprovalSheet();
-}
 
 function initApprovalPanel() {
   const sel = document.getElementById('apprMonth');
@@ -1626,16 +1605,14 @@ async function init() {
   document.getElementById('todayBtn').addEventListener('click', () => { weekOffset = 0; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('mealBtn').addEventListener('click', toggleMeal);
+  document.querySelectorAll('#sideNav .navitem').forEach(b =>
+    b.addEventListener('click', () => selectView(b.dataset.view)));
   document.getElementById('mealReload').addEventListener('click', reloadMeal);
   document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);
-  document.getElementById('calBtn').addEventListener('click', toggleCal);
   document.getElementById('calReload').addEventListener('click', fetchCal);
   document.getElementById('calPrev').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, -1)));
   document.getElementById('calNext').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, 1)));
   document.getElementById('calToday').addEventListener('click', () => calGoMonth(calCurrentMonth()));
-  document.getElementById('ttreeBtn').addEventListener('click', toggleTtree);
-  document.getElementById('ttreeClose').addEventListener('click', closeTtreePanel);
   document.getElementById('ttreeCancel').addEventListener('click', closeTtreePanel);
   document.getElementById('ttreeLogin').addEventListener('click', doTtreeLogin);
   document.getElementById('ttreeReload').addEventListener('click', loadTtreeStatus);
@@ -1650,7 +1627,6 @@ async function init() {
   document.getElementById('ttreeApproval').addEventListener('change', renderTtreeApprovalDetail);
   document.getElementById('ttreePreview').addEventListener('click', previewTtreeRequest);
   document.getElementById('ttreeSubmit').addEventListener('click', submitTtreeRequest);
-  document.getElementById('approvalBtn').addEventListener('click', toggleApproval);
   document.getElementById('apprLookup').addEventListener('click', lookupApprovalPayday);
   document.getElementById('apprOpen').addEventListener('click', openApprovalForm);
   document.getElementById('calSelAll').addEventListener('click', () => calSetAll(true));

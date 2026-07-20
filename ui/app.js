@@ -1332,6 +1332,7 @@ function applyTtreeToWorkGrid(res) {
         if (fx) c[fx.field] = normalizeClockValue(fx.value);
         changed++;
       } else {
+        if (c.type === '연차' || c.type === '휴일') continue;   // 종일 휴무로 지정된 날은 시간 채움 무의미
         const inV = normalizeClockValue(it.startTime);
         const outV = normalizeClockValue(it.endTime);
         let touched = false;

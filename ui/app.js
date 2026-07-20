@@ -12,6 +12,7 @@ let weekOffset = 0;        // 0 = 이번 주
 let started = false;
 let saveTimer = null;
 let holidayMap = {};       // { 'YYYY-MM-DD': '공휴일 이름' } — 8시간 근무로 인정
+let renderedTodaySig = null; // 마지막 그리드 렌더 시점의 오늘(주+요일) 서명 — 자정 넘어가면 재렌더 트리거
 
 /* ---------------- time helpers (단위: 초) ---------------- */
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -392,6 +393,7 @@ function buildGrid() {
   const monday = new Date(mondayKey + 'T00:00:00');
   const ti = todayInfo();
   const isThisWeek = (mondayKey === ti.mondayKey);
+  renderedTodaySig = ti.mondayKey + ':' + ti.dayIndex;   // 이 렌더가 어느 '오늘'을 기준으로 그렸는지 기록
 
   DAYS.forEach(([key, label], i) => {
     const date = addDays(monday, i);
@@ -533,6 +535,13 @@ function recompute() {
   const ti = todayInfo();
   const isThisWeek = (mondayKey === ti.mondayKey);
   const now = nowSec();
+
+  // 자정을 넘겨 '오늘'이 바뀌었으면(1초 타이머로 앱을 켜둔 채 날짜가 넘어간 경우)
+  // 그리드를 다시 그려 민트 강조를 옳은 요일로 이동시킨다. buildGrid가 renderedTodaySig를 갱신하므로 무한루프 없음.
+  if (renderedTodaySig !== null && renderedTodaySig !== ti.mondayKey + ':' + ti.dayIndex) {
+    rerenderWeek();
+    return;
+  }
 
   // 근무 시간 셀
   document.querySelectorAll('#rowWork td').forEach(td => {
@@ -848,6 +857,15 @@ function calPersistSelection() {
   scheduleSave();
 }
 
+// 전체 선택/해제: on=true면 모든 캘린더 표시, false면 모두 숨김.
+function calSetAll(on) {
+  if (!calCalendars.length) return;
+  calSelected = new Set(on ? calCalendars.map(c => c.id) : []);
+  calPersistSelection();
+  renderCalLegend();   // 체크박스 상태 반영
+  renderCalGrid();     // 그리드 갱신
+}
+
 function setCalStatus(msg, cls) {
   const el = document.getElementById('calStatus');
   if (!el) return;
@@ -866,6 +884,20 @@ function updateCalLabel() {
   const today = document.getElementById('calToday');
   const cur = calCurrentMonth();
   if (today) today.disabled = (calMonth.y === cur.y && calMonth.m === cur.m);
+}
+
+// 범례에 보일 이름. 구독한 남의 캘린더는 '실제 사람 이름(ownerName)'을 우선 보여준다.
+// 사람이 자기 캘린더를 팀명으로 지어두면 label(=name)이 팀명뿐이라 누군지 알 수 없기 때문.
+// 캘린더 이름(name)이 사람 이름과 다르면 뒤에 '· 팀명'처럼 덧붙인다.
+function calLegendLabel(c) {
+  if (c.type === 'holiday' || c.type === 'company' || c.mine) return c.label;
+  const owner = (c.ownerName || '').trim();
+  const name = (c.name || '').trim();
+  if (owner) {
+    if (name && name !== owner && name !== '내 일정') return owner + ' · ' + name;
+    return owner;
+  }
+  return c.label;
 }
 
 // 체크박스(캘린더별 표시 토글). 색 점 + 라벨.
@@ -897,8 +929,9 @@ function renderCalLegend() {
 
     const txt = document.createElement('span');
     txt.className = 'calleglabel';
-    txt.textContent = c.label;
-    txt.title = c.label + (c.mine ? '' : (c.ownerName ? ' (' + c.ownerName + ')' : ''));
+    const shown = calLegendLabel(c);
+    txt.textContent = shown;
+    txt.title = shown + (c.mine || !c.ownerName || shown.indexOf(c.ownerName) !== -1 ? '' : ' (' + c.ownerName + ')');
 
     wrap.appendChild(chk); wrap.appendChild(dot); wrap.appendChild(txt);
     box.appendChild(wrap);
@@ -1151,6 +1184,8 @@ async function init() {
   document.getElementById('calPrev').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, -1)));
   document.getElementById('calNext').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, 1)));
   document.getElementById('calToday').addEventListener('click', () => calGoMonth(calCurrentMonth()));
+  document.getElementById('calSelAll').addEventListener('click', () => calSetAll(true));
+  document.getElementById('calSelNone').addEventListener('click', () => calSetAll(false));
   bindFormulaBar();
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) {

@@ -1293,6 +1293,62 @@ function renderTtreeList(id, items, emptyText) {
     box.appendChild(row);
   });
 }
+/* ---- TTree 신청 내역 → 근태 그리드 반영 ---- */
+// 0.5일 휴가는 시간대로 반차 방향 판별(오전에 쉬면 오전반차), 그 외 휴가는 연차.
+function ttreeLeaveGridType(item) {
+  const dc = parseFloat(item.dayCount);
+  const st = parseTimeToSec(item.startTime);
+  if (dc === 0.5 && st !== null) return st < 12 * 3600 ? '오전반차' : '오후반차';
+  return '연차';
+}
+// 반려(800)/취소(999)를 뺀 휴가·출장을 근태 주간 데이터에 채운다.
+//  - 휴가: 유형이 비어 있는 날만 설정 (사용자가 고른 유형은 유지)
+//  - 출장/교육: 출근·퇴근이 비어 있는 칸만 신청 시간으로 채움 (EHR 실측·직접 입력 우선)
+function applyTtreeToWorkGrid(res) {
+  if (!res || res.status !== 'ok') return;
+  const items = [];
+  (res.leave || []).forEach(it => items.push(Object.assign({ _kind: 'leave' }, it)));
+  (res.businessTrip || []).forEach(it => items.push(Object.assign({ _kind: 'bsrp' }, it)));
+  let changed = 0;
+  items.forEach(it => {
+    const code = String(it.statusCode || '');
+    if (code === '800' || code === '999') return;
+    if (!it.startDate) return;
+    const start = new Date(it.startDate + 'T00:00:00');
+    const end = new Date((it.endDate || it.startDate) + 'T00:00:00');
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const idx = (d.getDay() + 6) % 7;
+      if (idx > 4) continue;                       // 주말 제외
+      const dayStr = ymd(d);
+      if (holidayMap[dayStr]) continue;            // 공휴일은 이미 8h 인정
+      const wk = weekData(ymd(mondayOf(d)));
+      const c = wk[DAYS[idx][0]];
+      if (it._kind === 'leave') {
+        if (c.type) continue;
+        const t = ttreeLeaveGridType(it);
+        c.type = t;
+        const fx = halfdayFixed(t);
+        if (fx) c[fx.field] = normalizeClockValue(fx.value);
+        changed++;
+      } else {
+        const inV = normalizeClockValue(it.startTime);
+        const outV = normalizeClockValue(it.endTime);
+        let touched = false;
+        if (inV && parseTimeToSec(c.in) === null) { c.in = inV; touched = true; }
+        if (outV && parseTimeToSec(c.out) === null) { c.out = outV; touched = true; }
+        if (touched) changed++;
+      }
+    }
+  });
+  if (!changed) return;
+  scheduleSave();
+  fillInputsFromState();
+  recompute();
+  const status = document.getElementById('statusLine');
+  if (status) { status.className = 'status ok'; status.textContent = 'TTree 휴가·출장 ' + changed + '일 근태 반영'; }
+}
+
 async function loadTtreeStatus() {
   if (ttreeBusy) return;
   setTtreeBusy(true);
@@ -1306,6 +1362,7 @@ async function loadTtreeStatus() {
     renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
     renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
     if (res.leaveBalance) { ttreeBalance = res.leaveBalance; renderTtreeBalance(); }
+    applyTtreeToWorkGrid(res);
     const range = document.getElementById('ttreeStatusRange');
     if (range && res.range) range.textContent = res.range.begin + ' ~ ' + res.range.end;
     setTtreeMessage('TTree 신청 현황 조회 완료', 'ok');
@@ -1697,6 +1754,8 @@ async function init() {
 
   // 앱 켤 때 자동 EHR 조회
   refreshEhr(false);
+  // TTree 휴가·출장도 백그라운드로 한 번 조회해 근태에 반영 (로그인 안 돼 있으면 조용히 넘어감)
+  if (apiReady('ttree_status')) loadTtreeStatus();
 }
 
 if (window.pywebview) {

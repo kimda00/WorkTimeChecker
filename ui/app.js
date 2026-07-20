@@ -1266,7 +1266,11 @@ function renderTtreeList(id, items, emptyText) {
     box.appendChild(empty);
     return;
   }
-  items.forEach(item => {
+  // TTree API 응답 순서가 뒤죽박죽이라 시작일(+시작시간) 최신순으로 정렬해서 보여준다
+  const sorted = items.slice().sort((a, b) =>
+    String(b.startDate || '').localeCompare(String(a.startDate || '')) ||
+    String(b.startTime || '').localeCompare(String(a.startTime || '')));
+  sorted.forEach(item => {
     const row = document.createElement('div');
     row.className = 'ttree-row';
     const main = document.createElement('div');

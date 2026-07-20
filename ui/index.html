@@ -18,10 +18,12 @@
   </div>
   <div class="wrap">
     <div class="topbar">
-      <button id="prevWeek" class="navbtn" title="지난 주">◀</button>
-      <div id="weekLabel" class="weeklabel">이번 주</div>
-      <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
-      <button id="todayBtn" class="todaybtn" title="이번 주로 이동">오늘</button>
+      <div id="weekNav" class="weeknav">
+        <button id="prevWeek" class="navbtn" title="지난 주">◀</button>
+        <div id="weekLabel" class="weeklabel">이번 주</div>
+        <button id="nextWeek" class="navbtn" title="다음 주">▶</button>
+        <button id="todayBtn" class="todaybtn" title="이번 주로 이동">오늘</button>
+      </div>
       <div class="spacer"></div>
       <button id="calBtn" class="themebtn" title="그룹웨어 캘린더 일정 보기">캘린더</button>
       <button id="mealBtn" class="themebtn" title="이번 주 식단표 보기">식단</button>
@@ -103,13 +105,21 @@
         <span id="calStatus" class="calstatus"></span>
         <button id="calReload" class="ehrbtn" title="캘린더 새로 불러오기">불러오기</button>
       </div>
-      <div id="calLegend" class="callegend"></div>
-      <div id="calGridWrap" class="calgridwrap">
-        <div class="calweekhead">
-          <div class="cwh sun">일</div><div class="cwh">월</div><div class="cwh">화</div>
-          <div class="cwh">수</div><div class="cwh">목</div><div class="cwh">금</div><div class="cwh sat">토</div>
+      <div class="calbody">
+        <div id="calGridWrap" class="calgridwrap">
+          <div class="calweekhead">
+            <div class="cwh sun">일</div><div class="cwh">월</div><div class="cwh">화</div>
+            <div class="cwh">수</div><div class="cwh">목</div><div class="cwh">금</div><div class="cwh sat">토</div>
+          </div>
+          <div id="calGrid" class="calgrid"></div>
         </div>
-        <div id="calGrid" class="calgrid"></div>
+        <div class="calside">
+          <div class="calsidehead">
+            <button id="calSelAll" class="calselbtn" title="모든 캘린더 표시">전체 선택</button>
+            <button id="calSelNone" class="calselbtn" title="모든 캘린더 숨김">전체 해제</button>
+          </div>
+          <div id="calLegend" class="callegend"></div>
+        </div>
       </div>
     </div>
 

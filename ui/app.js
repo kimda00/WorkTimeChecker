@@ -1196,7 +1196,10 @@ function populateTtreeLookups(res) {
   const cap = document.getElementById('ttreeCaption');
   if (cap && res.user) cap.textContent = (res.user.userName || res.user.userId || '') + ' · ' + (res.user.deptName || '');
   const classSel = document.getElementById('ttreeLeaveClass');
-  fillSelect(classSel, res.leaveClasses || [], 'code', 'name', '휴가 분류 선택');
+  // 대부분 '일반'(연차)에서 신청하므로 placeholder 없이 일반을 기본 선택
+  fillSelect(classSel, res.leaveClasses || [], 'code', 'name');
+  const generalCl = (res.leaveClasses || []).find(c => c.name === '일반');
+  if (classSel && generalCl) classSel.value = generalCl.code;
   updateTtreeLeaveTypes();
   const approvalSel = document.getElementById('ttreeApproval');
   fillSelect(approvalSel, res.approvals || [], 'id', 'name', '결재선 선택');

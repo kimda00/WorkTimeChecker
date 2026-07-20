@@ -3,9 +3,9 @@
 const DAYS = [
   ['mon', '월'], ['tue', '화'], ['wed', '수'], ['thu', '목'], ['fri', '금'],
 ];
-const TYPES = ['', '연차', '오전반차', '오후반차', '휴일'];
-// TODO: '출장' 유형 검토(보류) — 근무시간이 사람마다 달라 하루 8h 초과도 가능.
-//   유력안: 출퇴근 자유 입력(EHR도 채움) + 비어 있으면 8h 인정. 확정 후 구현.
+// '출장' = 표시용 마커. 시간은 자유 입력(TTree/EHR도 채움)이고 근무 계산은 일반 근무와 동일.
+// '휴일'은 제거 — 진짜 공휴일은 holidayMap이 자동으로 빨간 표시 + 8h 인정하므로 불필요.
+const TYPES = ['', '연차', '오전반차', '오후반차', '출장'];
 
 let state = null;          // { settings, weeks: { 'YYYY-MM-DD(월요일)': { mon:{type,in,out}, ... } } }
 let weekOffset = 0;        // 0 = 이번 주
@@ -164,6 +164,11 @@ function normalizeStoredTimes() {
       if (!wk[key]) continue;
       wk[key].in = normalizeClockValue(wk[key].in);
       wk[key].out = normalizeClockValue(wk[key].out);
+      // 구버전 '휴일' 마이그레이션: 시간이 있으면 출장날 표시였을 것 → '출장',
+      // 없으면 8h 인정 유지를 위해 '연차'(진짜 공휴일이면 holidayMap이 어차피 우선).
+      if (wk[key].type === '휴일') {
+        wk[key].type = (wk[key].in || wk[key].out) ? '출장' : '연차';
+      }
       // 반차의 고정 경계(쉬는 쪽)만 강제. 일하는 쪽은 그대로 둠.
       const fx = halfdayFixed(wk[key].type);
       if (fx) wk[key][fx.field] = normalizeClockValue(fx.value);
@@ -481,7 +486,7 @@ function fillInputsFromState() {
 }
 
 function applyTypeClass(sel) {
-  sel.classList.remove('type-연차', 'type-오전반차', 'type-오후반차', 'type-휴일');
+  sel.classList.remove('type-연차', 'type-오전반차', 'type-오후반차', 'type-휴일', 'type-출장');
   if (sel.value) sel.classList.add('type-' + sel.value);
 }
 
@@ -1336,6 +1341,7 @@ function applyTtreeToWorkGrid(res) {
         const inV = normalizeClockValue(it.startTime);
         const outV = normalizeClockValue(it.endTime);
         let touched = false;
+        if (!c.type) { c.type = '출장'; touched = true; }        // 출장 마커 표시 (사용자 지정 유형은 유지)
         if (inV && parseTimeToSec(c.in) === null) { c.in = inV; touched = true; }
         if (outV && parseTimeToSec(c.out) === null) { c.out = outV; touched = true; }
         if (touched) changed++;

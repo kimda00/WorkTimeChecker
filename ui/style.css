@@ -290,7 +290,7 @@ table#grid {
 .type-연차 { background: rgba(240, 200, 110, .14); color: #f0c86e; }
 .type-오전반차 { background: rgba(63, 224, 197, .14); color: var(--mint); }
 .type-오후반차 { background: rgba(63, 224, 197, .20); color: var(--mint); }
-.type-휴일 { background: rgba(255, 255, 255, .05); color: var(--muted); }
+.type-출장 { background: rgba(110, 168, 255, .14); color: #6ea8ff; }
 
 /* 공휴일 (자동, 8시간 인정) */
 #grid thead th.hol, #grid thead th.hol .date { color: var(--red); }
@@ -416,7 +416,7 @@ html[data-theme="excel"] .typesel:focus { background: #e6f4ea; }
 html[data-theme="excel"] .type-연차 { background: rgba(234, 153, 0, .14); color: #b06000; }
 html[data-theme="excel"] .type-오전반차 { background: rgba(24, 128, 56, .12); color: #188038; }
 html[data-theme="excel"] .type-오후반차 { background: rgba(24, 128, 56, .18); color: #188038; }
-html[data-theme="excel"] .type-휴일 { background: rgba(0, 0, 0, .05); color: #5f6368; }
+html[data-theme="excel"] .type-출장 { background: rgba(26, 115, 232, .10); color: #1a73e8; }
 html[data-theme="excel"] #rowEstOut td { color: #b06000; }
 html[data-theme="excel"] #grid thead th.today {
   background: #e6f4ea; color: #188038; box-shadow: inset 0 -2px 0 #188038;

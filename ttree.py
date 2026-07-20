@@ -483,7 +483,8 @@ def fetch_status(days_before=90, days_after=90):
         bsrp_json = _json_response(bsrp_resp) if bsrp_resp.ok else {}
         leave = [_normalize_leave(x) for x in (leave_json.get("myVcatnSanctnReqInfoList") or [])]
         bsrp = [_normalize_bsrp(x) for x in (bsrp_json.get("myBsrpSanctnReqInfoList") or [])]
-        return {"status": "ok", "user": user, "range": {"begin": begin, "end": end}, "leave": leave, "businessTrip": bsrp}
+        return {"status": "ok", "user": user, "range": {"begin": begin, "end": end},
+                "leave": leave, "businessTrip": bsrp, "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 
@@ -534,6 +535,27 @@ def _select_approval_id(lines, requested_id="", requested_name=""):
     return lines[0].get("id") if lines else ""
 
 
+def _leave_balance(ctx):
+    """휴가 분류별 잔여 일수. [{classCode, total, used, remain}] — 실패 시 빈 리스트."""
+    try:
+        r = _post_json(ctx, "/vcatn/usedaylist/get", {})
+        if not r.ok:
+            return []
+        out = []
+        for row in _json_response(r).get("vcatnUseDayInfoList") or []:
+            total = float(row.get("vcatnDaycnt") or 0)
+            used = float(row.get("sumVcatnDayCnt") or 0)
+            out.append({
+                "classCode": row.get("vcatnClCd") or "",
+                "total": total,
+                "used": used,
+                "remain": round(total - used, 2),
+            })
+        return out
+    except Exception:
+        return []
+
+
 def fetch_lookups():
     p, browser, ctx, user, err = _session_context()
     if err:
@@ -564,7 +586,8 @@ def fetch_lookups():
         if pr.ok:
             preset = _json_response(pr).get("preset") or _json_response(pr)
         approvals = _approval_lines(ctx, user["userId"])
-        return {"status": "ok", "user": user, "leaveClasses": classes, "approvals": approvals, "preset": preset}
+        return {"status": "ok", "user": user, "leaveClasses": classes, "approvals": approvals,
+                "preset": preset, "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 

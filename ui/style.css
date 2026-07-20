@@ -877,6 +877,30 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
   border-color: var(--mint);
   box-shadow: 0 0 0 1px rgba(63, 224, 197, .35);
 }
+.ttree-auto-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: rgba(63, 224, 197, .14);
+  color: var(--mint);
+  font-size: 10px;
+  font-weight: 800;
+}
+.ttree-balance {
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+.ttree-balance-summary {
+  margin: 2px 0 2px;
+  color: var(--mint);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+.ttree-balance-summary:empty { display: none; }
 .ttree-approval {
   min-height: 20px;
   padding-top: 4px;

@@ -1200,7 +1200,9 @@ function populateTtreeLookups(res) {
   updateTtreeLeaveTypes();
   const approvalSel = document.getElementById('ttreeApproval');
   fillSelect(approvalSel, res.approvals || [], 'id', 'name', '결재선 선택');
-  renderTtreeApprovalDetail();
+  ttreeBalance = res.leaveBalance || [];
+  autoSetTtreeApproval();
+  renderTtreeBalance();
   setTtreeDefaults();
 }
 async function loadTtreeLookups() {
@@ -1300,6 +1302,7 @@ async function loadTtreeStatus() {
   if (res && res.status === 'ok') {
     renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
     renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
+    if (res.leaveBalance) { ttreeBalance = res.leaveBalance; renderTtreeBalance(); }
     const range = document.getElementById('ttreeStatusRange');
     if (range && res.range) range.textContent = res.range.begin + ' ~ ' + res.range.end;
     setTtreeMessage('TTree 신청 현황 조회 완료', 'ok');
@@ -1313,22 +1316,61 @@ function updateTtreeLeaveTypes() {
   const classCode = document.getElementById('ttreeLeaveClass')?.value || '';
   const cl = ((ttreeLookups && ttreeLookups.leaveClasses) || []).find(x => x.code === classCode);
   fillSelect(document.getElementById('ttreeLeaveType'), cl ? cl.types : [], 'code', 'name', '휴가 구분 선택');
-  fixTtreeApprovalByLeaveType();
+  autoSetTtreeApproval();
+  renderTtreeBalance();
 }
-function fixTtreeApprovalByLeaveType() {
-  const typeSel = document.getElementById('ttreeLeaveType');
+// 결재선 자동 선택 — TTree와 동일한 규칙.
+// 휴가 구분에 지정된 결재선(approvalLineName) → 없으면 선호 결재선 → 그래도 없으면 첫 항목.
+// (백엔드 build_leave_payload 의 _select_approval_id 와 같은 우선순위)
+const TTREE_PREFERRED_LINES = ['차상위자', '차상위자 - 최고관리자'];
+function autoSetTtreeApproval() {
   const approvalSel = document.getElementById('ttreeApproval');
-  if (!typeSel || !approvalSel) return;
-  const opt = typeSel.options[typeSel.selectedIndex];
-  const name = opt && opt.dataset.approvalLineName;
-  if (!name) return;
-  for (const option of approvalSel.options) {
-    if (option.textContent === name) {
-      approvalSel.value = option.value;
-      break;
+  if (!approvalSel || !approvalSel.options.length) return;
+  const kind = document.getElementById('ttreeKind')?.value || 'leave';
+  let wanted = '';
+  if (kind === 'leave') {
+    const typeSel = document.getElementById('ttreeLeaveType');
+    const opt = typeSel && typeSel.options[typeSel.selectedIndex];
+    wanted = (opt && opt.dataset.approvalLineName) || '';
+  }
+  const byName = name => Array.from(approvalSel.options).find(o => o.value && o.textContent === name);
+  let target = wanted ? byName(wanted) : null;
+  if (!target) {
+    for (const pref of TTREE_PREFERRED_LINES) {
+      target = byName(pref);
+      if (target) break;
     }
   }
+  if (!target) target = Array.from(approvalSel.options).find(o => o.value);
+  if (target) approvalSel.value = target.value;
   renderTtreeApprovalDetail();
+}
+/* ---- 잔여 휴가 표시 ---- */
+let ttreeBalance = [];
+function ttreeFmtDay(v) {
+  const n = Math.round(Number(v) * 100) / 100;
+  return isNaN(n) ? String(v) : String(n);
+}
+function ttreeClassName(code) {
+  const c = ((ttreeLookups && ttreeLookups.leaveClasses) || []).find(x => x.code === code);
+  return (c && c.name) || code;
+}
+function renderTtreeBalance() {
+  const el = document.getElementById('ttreeLeaveBalance');
+  if (el) {
+    const cls = document.getElementById('ttreeLeaveClass')?.value || '';
+    const row = ttreeBalance.find(b => b.classCode === cls) ||
+      (ttreeBalance.length === 1 ? ttreeBalance[0] : null);
+    el.textContent = row
+      ? '잔여 ' + ttreeFmtDay(row.remain) + '일 · 총 ' + ttreeFmtDay(row.total) + '일 중 ' + ttreeFmtDay(row.used) + '일 사용'
+      : '—';
+  }
+  const sum = document.getElementById('ttreeBalanceSummary');
+  if (sum) {
+    sum.textContent = ttreeBalance.length
+      ? ttreeBalance.map(b => ttreeClassName(b.classCode) + ' 잔여 ' + ttreeFmtDay(b.remain) + '일 (총 ' + ttreeFmtDay(b.total) + ' · 사용 ' + ttreeFmtDay(b.used) + ')').join('  ·  ')
+      : '';
+  }
 }
 function renderTtreeApprovalDetail() {
   const box = document.getElementById('ttreeApprovalDetail');
@@ -1350,6 +1392,7 @@ function applyTtreeKind() {
   if (bsrp) bsrp.hidden = kind !== 'bsrp';
   if (title) title.textContent = kind === 'leave' ? '휴가 신청' : '출장 신청';
   applyTtreeBsrpRange();
+  autoSetTtreeApproval();
 }
 function closeTtreePanel() {
   selectView('work');
@@ -1623,7 +1666,7 @@ async function init() {
   document.getElementById('ttreeLookupReload').addEventListener('click', loadTtreeLookups);
   document.getElementById('ttreeKind').addEventListener('change', applyTtreeKind);
   document.getElementById('ttreeLeaveClass').addEventListener('change', updateTtreeLeaveTypes);
-  document.getElementById('ttreeLeaveType').addEventListener('change', fixTtreeApprovalByLeaveType);
+  document.getElementById('ttreeLeaveType').addEventListener('change', autoSetTtreeApproval);
   document.getElementById('ttreeLeaveRange').addEventListener('change', applyTtreeRangeTimes);
   document.getElementById('ttreeLeaveStart').addEventListener('change', applyTtreeRangeTimes);
   document.getElementById('ttreeBsrpRange').addEventListener('change', applyTtreeBsrpRange);

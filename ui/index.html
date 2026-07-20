@@ -152,7 +152,7 @@
           <div class="ttree-modal-body">
             <div class="ttree-section-title">결재선 정보</div>
             <div class="ttree-field-row">
-              <label for="ttreeApproval">결재선</label>
+              <label for="ttreeApproval" title="TTree와 동일하게 휴가 구분에 따라 자동 선택됩니다. 필요하면 직접 바꿀 수 있어요.">결재선 <small class="ttree-auto-tag">자동</small></label>
               <select id="ttreeApproval" class="ttree-select"></select>
             </div>
             <div class="ttree-field-row ttree-approver-row">
@@ -171,6 +171,10 @@
 
             <div id="ttreeLeaveForm" class="ttree-form">
               <label>휴가 분류<select id="ttreeLeaveClass" class="ttree-select"></select></label>
+              <div class="ttree-field-row">
+                <span>잔여 휴가</span>
+                <div id="ttreeLeaveBalance" class="ttree-balance">—</div>
+              </div>
               <label>휴가 구분<select id="ttreeLeaveType" class="ttree-select"></select></label>
               <label>기간<select id="ttreeLeaveRange" class="ttree-select">
                 <option value="DAY">종일</option>
@@ -227,6 +231,7 @@
           </div>
           <div id="ttreeMessage" class="ttree-message"></div>
           <div class="ttree-list-wrap">
+            <div id="ttreeBalanceSummary" class="ttree-balance-summary"></div>
             <div class="ttree-status-range" id="ttreeStatusRange"></div>
             <h4>휴가</h4>
             <div id="ttreeLeaveList" class="ttree-list"></div>

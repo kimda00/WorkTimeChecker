@@ -404,12 +404,18 @@ def _normalize_leave(item):
     }
 
 
+_BSRP_TYPE_NAMES = {"bsrp": "출장", "edu": "교육"}
+
+
 def _normalize_bsrp(item):
     code = item.get("confmCd") or item.get("bsrpConfmCd") or item.get("workModConfmCd") or ""
+    # API가 이름(bsrpTypeNm) 없이 타입 코드("bsrp"/"edu")만 주는 경우가 있어 한글로 매핑한다
+    raw_type = item.get("bsrpType") or ""
+    type_name = item.get("bsrpTypeNm") or _BSRP_TYPE_NAMES.get(raw_type, raw_type)
     return {
         "kind": "businessTrip",
         "id": item.get("confmId") or item.get("bsrpSeq") or "",
-        "title": item.get("bsrpTypeNm") or item.get("bsrpType") or "출장",
+        "title": type_name or "출장",
         "startDate": _iso_date(item.get("bsrpBgnDe") or item.get("workBgnDe") or item.get("searchBgnDe")),
         "endDate": _iso_date(item.get("bsrpEndDe") or item.get("workEndDe") or item.get("searchEndDe")),
         "startTime": _hhmm(item.get("bsrpBgnTime") or item.get("workBgnTime")),

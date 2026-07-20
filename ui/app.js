@@ -1323,26 +1323,30 @@ function updateTtreeLeaveTypes() {
   renderTtreeBalance();
 }
 // 결재선 자동 선택 — TTree와 동일한 규칙.
-// 휴가 구분에 지정된 결재선(approvalLineName) → 없으면 선호 결재선 → 그래도 없으면 첫 항목.
+// 휴가: 구분에 지정된 결재선(approvalLineName) → 없으면 선호 결재선 → 첫 항목.
+// 출장/교육: 구분별 매핑(교육은 2차 결재까지 필요) → 선호 결재선 → 첫 항목.
 // (백엔드 build_leave_payload 의 _select_approval_id 와 같은 우선순위)
 const TTREE_PREFERRED_LINES = ['차상위자', '차상위자 - 최고관리자'];
+const TTREE_BSRP_APPROVAL = { bsrp: ['차상위자'], edu: ['차상위자 - 최고관리자'] };
 function autoSetTtreeApproval() {
   const approvalSel = document.getElementById('ttreeApproval');
   if (!approvalSel || !approvalSel.options.length) return;
   const kind = document.getElementById('ttreeKind')?.value || 'leave';
-  let wanted = '';
+  let wantedNames = [];
   if (kind === 'leave') {
     const typeSel = document.getElementById('ttreeLeaveType');
     const opt = typeSel && typeSel.options[typeSel.selectedIndex];
-    wanted = (opt && opt.dataset.approvalLineName) || '';
+    const name = (opt && opt.dataset.approvalLineName) || '';
+    if (name) wantedNames = [name];
+  } else {
+    const bsrpType = document.getElementById('ttreeBsrpType')?.value || 'bsrp';
+    wantedNames = TTREE_BSRP_APPROVAL[bsrpType] || [];
   }
   const byName = name => Array.from(approvalSel.options).find(o => o.value && o.textContent === name);
-  let target = wanted ? byName(wanted) : null;
-  if (!target) {
-    for (const pref of TTREE_PREFERRED_LINES) {
-      target = byName(pref);
-      if (target) break;
-    }
+  let target = null;
+  for (const name of wantedNames.concat(TTREE_PREFERRED_LINES)) {
+    target = byName(name);
+    if (target) break;
   }
   if (!target) target = Array.from(approvalSel.options).find(o => o.value);
   if (target) approvalSel.value = target.value;
@@ -1672,6 +1676,7 @@ async function init() {
   document.getElementById('ttreeLeaveType').addEventListener('change', autoSetTtreeApproval);
   document.getElementById('ttreeLeaveRange').addEventListener('change', applyTtreeRangeTimes);
   document.getElementById('ttreeLeaveStart').addEventListener('change', applyTtreeRangeTimes);
+  document.getElementById('ttreeBsrpType').addEventListener('change', autoSetTtreeApproval);
   document.getElementById('ttreeBsrpRange').addEventListener('change', applyTtreeBsrpRange);
   document.getElementById('ttreeBsrpStart').addEventListener('change', applyTtreeBsrpRange);
   document.getElementById('ttreeApproval').addEventListener('change', renderTtreeApprovalDetail);

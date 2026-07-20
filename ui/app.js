@@ -4,8 +4,9 @@ const DAYS = [
   ['mon', '월'], ['tue', '화'], ['wed', '수'], ['thu', '목'], ['fri', '금'],
 ];
 // '출장' = 표시용 마커. 시간은 자유 입력(TTree/EHR도 채움)이고 근무 계산은 일반 근무와 동일.
+// '(무급)' 반차 = 표시만 다르고 계산은 일반 반차와 동일(4h 인정 = 주 40h 목표에서 그만큼 빠지는 것과 같은 산수).
 // '휴일'은 제거 — 진짜 공휴일은 holidayMap이 자동으로 빨간 표시 + 8h 인정하므로 불필요.
-const TYPES = ['', '연차', '오전반차', '오후반차', '출장'];
+const TYPES = ['', '연차', '오전반차', '오후반차', '오전반차(무급)', '오후반차(무급)', '출장'];
 
 let state = null;          // { settings, weeks: { 'YYYY-MM-DD(월요일)': { mon:{type,in,out}, ... } } }
 let weekOffset = 0;        // 0 = 이번 주
@@ -133,9 +134,12 @@ function weekData(mondayKey) {
 //  오전반차 = 오전 휴무 → 출근 13:00 고정 / 퇴근은 자유
 //  오후반차 = 오후 휴무 → 퇴근 13:00 고정 / 출근은 자유
 function halfdayFixed(type) {
-  if (type === '오전반차') return { field: 'in', value: '13:00' };
-  if (type === '오후반차') return { field: 'out', value: '13:00' };
+  if (type && type.indexOf('오전반차') === 0) return { field: 'in', value: '13:00' };
+  if (type && type.indexOf('오후반차') === 0) return { field: 'out', value: '13:00' };
   return null;
+}
+function isHalfday(type) {
+  return !!(type && (type.indexOf('오전반차') === 0 || type.indexOf('오후반차') === 0));
 }
 
 // 화면 표시용: 분 단위로 내림 ('07:43:27' → '07:43')
@@ -241,9 +245,9 @@ function ecell(cell, dayStr) {
   return (t === cell.type) ? cell : Object.assign({}, cell, { type: t });
 }
 
-// 반차 인정 시간(크레딧). 오전/오후 반차 = 4h 자동 인정.
+// 반차 인정 시간(크레딧). 오전/오후 반차(무급 포함) = 4h 자동 인정.
 function creditSec(cell, settings) {
-  return (cell.type === '오전반차' || cell.type === '오후반차') ? settings.halfTarget : 0;
+  return isHalfday(cell.type) ? settings.halfTarget : 0;
 }
 // 하루 근무 목표. 반차도 하루 목표는 8h (4h 인정 + 4h 실근무).
 function targetSec(cell, settings) {
@@ -302,7 +306,7 @@ function weeklySum(wk, s, mondayKey, now, mode) {
         : ((outS !== null) ? outS : now);              // 오늘
     } else {
       // 미래: 연차/반차/공휴일(확정)은 'now'에도 포함, 일반 근무 예정은 제외
-      const isLeave = (ec.type === '연차' || ec.type === '오전반차' || ec.type === '오후반차' || ec.type === '공휴일' || ec.type === '휴일');
+      const isLeave = (ec.type === '연차' || isHalfday(ec.type) || ec.type === '공휴일' || ec.type === '휴일');
       if (mode === 'now' && !isLeave) return;
       end = (outS !== null) ? outS : null;             // 연차/반차/공휴일 또는 예정: 입력된 것만
     }
@@ -486,7 +490,7 @@ function fillInputsFromState() {
 }
 
 function applyTypeClass(sel) {
-  sel.classList.remove('type-연차', 'type-오전반차', 'type-오후반차', 'type-휴일', 'type-출장');
+  Array.from(sel.classList).forEach(cl => { if (cl.indexOf('type-') === 0) sel.classList.remove(cl); });
   if (sel.value) sel.classList.add('type-' + sel.value);
 }
 
@@ -1300,10 +1304,15 @@ function renderTtreeList(id, items, emptyText) {
 }
 /* ---- TTree 신청 내역 → 근태 그리드 반영 ---- */
 // 0.5일 휴가는 시간대로 반차 방향 판별(오전에 쉬면 오전반차), 그 외 휴가는 연차.
+// 구분명에 '무급'이 들어가면 (무급) 반차로 표시 구분.
 function ttreeLeaveGridType(item) {
   const dc = parseFloat(item.dayCount);
   const st = parseTimeToSec(item.startTime);
-  if (dc === 0.5 && st !== null) return st < 12 * 3600 ? '오전반차' : '오후반차';
+  const unpaid = String(item.title || '').indexOf('무급') !== -1;
+  if (dc === 0.5 && st !== null) {
+    const base = st < 12 * 3600 ? '오전반차' : '오후반차';
+    return unpaid ? base + '(무급)' : base;
+  }
   return '연차';
 }
 // 반려(800)/취소(999)를 뺀 휴가·출장을 근태 주간 데이터에 채운다.

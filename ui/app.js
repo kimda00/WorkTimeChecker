@@ -1390,7 +1390,7 @@ function applyTtreeKind() {
   const title = document.getElementById('ttreeTitle');
   if (leave) leave.hidden = kind !== 'leave';
   if (bsrp) bsrp.hidden = kind !== 'bsrp';
-  if (title) title.textContent = kind === 'leave' ? '휴가 신청' : '출장 신청';
+  if (title) title.textContent = kind === 'leave' ? '휴가 신청' : '출장/교육 신청';
   applyTtreeBsrpRange();
   autoSetTtreeApproval();
 }
@@ -1488,7 +1488,7 @@ async function submitTtreeRequest() {
     return;
   }
   const kind = document.getElementById('ttreeKind')?.value || 'leave';
-  const label = kind === 'leave' ? '휴가' : '출장';
+  const label = kind === 'leave' ? '휴가' : '출장/교육';
   if (!window.confirm('TTree에 실제 ' + label + ' 신청을 등록할까요?')) return;
   setTtreeBusy(true);
   setTtreeMessage('TTree에 실제 ' + label + ' 신청 전송 중...');

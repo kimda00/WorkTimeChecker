@@ -72,6 +72,8 @@ JSON_HEADERS = dict(HEADERS, **{"Content-Type": "application/json;charset=UTF-8"
 FORM_HEADERS = dict(HEADERS, **{"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
 LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 _CHANNELS = ["chrome", "msedge", None]
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 
 def _launch(p, headless):
@@ -139,17 +141,22 @@ def _json_response(resp):
             return {}
 
 
+def _req(ctx):
+    # BrowserContext(헤드풀 로그인)면 .request, APIRequestContext(헤드리스 조회)면 자기 자신
+    return getattr(ctx, "request", ctx)
+
+
 def _get(ctx, path, params=None):
-    return ctx.request.get(ORIGIN + path, params=params or {}, headers=HEADERS)
+    return _req(ctx).get(ORIGIN + path, params=params or {}, headers=HEADERS)
 
 
 def _post_json(ctx, path, data):
-    return ctx.request.post(ORIGIN + path, data=json.dumps(data or {}, ensure_ascii=False), headers=JSON_HEADERS)
+    return _req(ctx).post(ORIGIN + path, data=json.dumps(data or {}, ensure_ascii=False), headers=JSON_HEADERS)
 
 
 def _post_form(ctx, path, data):
     encoded = urlencode(data or {})
-    return ctx.request.post(ORIGIN + path, data=encoded, headers=FORM_HEADERS)
+    return _req(ctx).post(ORIGIN + path, data=encoded, headers=FORM_HEADERS)
 
 
 def _current_user(ctx):
@@ -280,9 +287,32 @@ def _electron_cookies_for_origin():
     return cookies
 
 
+def _cookies_storage_state(cookies):
+    """add_cookies 형식의 쿠키를 storage_state dict 로 변환 (필수 필드 기본값 보강)."""
+    out = []
+    for c in cookies or []:
+        item = dict(c)
+        item.setdefault("expires", -1)
+        item.setdefault("sameSite", "Lax")
+        out.append(item)
+    return {"cookies": out, "origins": []}
+
+
 def _with_context(headless=True, prefer_electron=False):
     from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
+    if headless:
+        # 조회는 전부 순수 HTTP 라 브라우저를 띄우지 않는다
+        # (실제 Chrome 새 헤드리스가 창을 잠깐 깜빡이는 문제 + 기동 속도 개선)
+        req_kwargs = {"user_agent": BROWSER_UA}   # 기본 UA(Playwright/x.x)는 서버가 튕길 수 있다
+        if os.path.exists(STATE) and not prefer_electron:
+            req_kwargs["storage_state"] = STATE
+        else:
+            cookies = _electron_cookies_for_origin()
+            if cookies:
+                req_kwargs["storage_state"] = _cookies_storage_state(cookies)
+        ctx = p.request.new_context(**req_kwargs)
+        return p, None, ctx
     browser = _launch(p, headless=headless)
     kwargs = {}
     if os.path.exists(STATE) and not prefer_electron:
@@ -308,7 +338,8 @@ def _close(p, browser, ctx, save=True):
     except Exception:
         pass
     try:
-        browser.close()
+        if browser:
+            browser.close()
     except Exception:
         pass
     try:

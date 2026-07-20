@@ -1,4 +1,4 @@
-:root {
+﻿:root {
   color-scheme: dark;
   --bg: #0e1114;          /* near-black 배경 */
   --panel: #161a1f;       /* 살짝 떠보이는 패널 */
@@ -652,3 +652,373 @@ html[data-theme="excel"] .calday.other { background: rgba(0, 0, 0, .015); }
 html[data-theme="excel"] .calday.other .caldaynum { color: #b0b4b9; }
 html[data-theme="excel"] .calchip { color: #202124; }
 html[data-theme="excel"] .calchip.allday { color: #10201d; }
+
+/* =================== TTree 휴가/출장 패널 =================== */
+#ttreePanel { display: none; }
+.wrap.ttree-mode #ttreePanel { display: block; }
+.wrap.ttree-mode .topbar,
+.wrap.ttree-mode .settingbar,
+.wrap.ttree-mode table#grid,
+.wrap.ttree-mode .sumcap,
+.wrap.ttree-mode .summary,
+.wrap.ttree-mode #statusLine,
+.wrap.ttree-mode #mealPanel { display: none; }
+.wrap.ttree-mode {
+  padding: 0;
+  background: #777;
+  min-height: 100vh;
+}
+
+.ttree-shell {
+  display: grid;
+  grid-template-columns: minmax(430px, 478px) minmax(310px, 1fr);
+  gap: 14px;
+  align-items: start;
+  padding: 0 14px 14px;
+}
+.ttree-modal,
+.ttree-status-panel {
+  background: #fff;
+  color: #4b4f54;
+  border: 0;
+  border-radius: 0;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, .24);
+  overflow: hidden;
+  min-width: 0;
+}
+.ttree-modal-head {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  background: #062d7f;
+  color: #fff;
+}
+.ttree-modal-head strong {
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+.ttree-close {
+  margin-left: auto;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 20px;
+  font-weight: 400;
+}
+.ttree-close:hover { background: rgba(255, 255, 255, .14); }
+.ttree-modal-body {
+  padding: 18px 16px 14px;
+  max-height: calc(100vh - 158px);
+  overflow: auto;
+}
+.ttree-section-title {
+  margin: 0 0 10px;
+  color: #4b4f54;
+  font-size: 14px;
+  font-weight: 800;
+}
+.ttree-request-title { margin-top: 24px; }
+.ttree-field-row,
+.ttree-form label {
+  display: grid;
+  grid-template-columns: 182px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  margin: 0 0 5px;
+  color: #666b70;
+  font-size: 14px;
+  font-weight: 500;
+}
+.ttree-approver-row { align-items: start; min-height: 28px; }
+.ttree-form { display: block; }
+.ttree-form[hidden] { display: none; }
+.ttree-input,
+.ttree-select,
+.ttree-textarea {
+  width: 100%;
+  border: 1px solid #d6dee2;
+  border-radius: 3px;
+  background: #fff;
+  color: #666b70;
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  box-shadow: none;
+}
+.ttree-select {
+  height: 26px;
+  padding: 0 30px 0 10px;
+}
+.ttree-input {
+  height: 29px;
+  padding: 0 8px;
+}
+.ttree-input[type="date"],
+.ttree-input:disabled {
+  border-width: 0 0 1px;
+  border-color: #d4dcdf;
+  border-style: dashed;
+  border-radius: 0;
+  background: #fff;
+  color: #666b70;
+  opacity: 1;
+}
+.ttree-textarea {
+  min-height: 60px;
+  padding: 7px 8px;
+  resize: vertical;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.ttree-input::placeholder,
+.ttree-textarea::placeholder { color: #8a949b; }
+.ttree-input:focus,
+.ttree-select:focus,
+.ttree-textarea:focus {
+  border-color: #8eb5d0;
+  box-shadow: 0 0 0 1px rgba(6, 45, 127, .08);
+}
+.ttree-approval {
+  min-height: 22px;
+  padding-top: 2px;
+  color: #555b60;
+  font-size: 13px;
+  text-align: right;
+  line-height: 1.5;
+}
+.ttree-approval::before {
+  content: "•";
+  margin-right: 14px;
+  color: #596067;
+}
+.ttree-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 0 8px 182px;
+  color: #f15b50;
+  font-size: 12px;
+  font-weight: 700;
+}
+.ttree-confirm input { width: 14px; height: 14px; }
+.ttree-preview {
+  display: none;
+  margin: 10px 0 0 182px;
+  max-height: 116px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #dbe4e8;
+  border-radius: 3px;
+  background: #f8fafb;
+  color: #34404a;
+  font-size: 11px;
+  user-select: text;
+  -webkit-user-select: text;
+  white-space: pre-wrap;
+}
+.ttree-preview:not(:empty) { display: block; }
+.ttree-modal-foot {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  padding: 14px 16px;
+  background: #f4f5f6;
+}
+.ttree-submit-btn,
+.ttree-cancel-btn,
+.ttree-soft-btn {
+  height: 34px;
+  min-width: 58px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 16px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ttree-submit-btn {
+  background: #e8f8d9;
+  color: #28732e;
+}
+.ttree-cancel-btn {
+  background: #e8eeee;
+  color: #202426;
+}
+.ttree-soft-btn {
+  height: 30px;
+  min-width: 0;
+  background: #073281;
+  color: #fff;
+  font-size: 12px;
+}
+.ttree-submit-btn:hover,
+.ttree-cancel-btn:hover,
+.ttree-soft-btn:hover { filter: brightness(.97); }
+.ttree-submit-btn:disabled,
+.ttree-cancel-btn:disabled,
+.ttree-soft-btn:disabled {
+  opacity: .55;
+  cursor: default;
+}
+
+.ttree-status-panel { min-height: 360px; }
+.ttree-status-head { height: 48px; }
+.ttree-caption {
+  margin-left: auto;
+  max-width: 210px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 12px;
+  color: rgba(255, 255, 255, .76);
+}
+.ttree-status-actions {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 6px;
+  background: #fff;
+}
+.ttree-status-actions .ttree-soft-btn {
+  background: #eef3f8;
+  color: #0a337f;
+  border: 1px solid #cfdce7;
+}
+.ttree-message {
+  min-height: 18px;
+  padding: 0 13px 6px;
+  color: #7a838a;
+  font-size: 12px;
+  text-align: left;
+}
+.ttree-message.err { color: #e24f44; }
+.ttree-message.ok { color: #247a31; }
+.ttree-list-wrap {
+  max-height: calc(100vh - 160px);
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+.ttree-status-range {
+  margin: 2px 0 8px;
+  color: #8a949b;
+  font-size: 11px;
+  text-align: right;
+}
+.ttree-list-wrap h4 {
+  margin: 12px 0 6px;
+  color: #4b4f54;
+  font-size: 13px;
+  font-weight: 800;
+}
+.ttree-list { display: grid; gap: 6px; }
+.ttree-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid #e2e8ec;
+  border-radius: 4px;
+  background: #fbfcfd;
+  padding: 8px;
+  min-height: 52px;
+}
+.ttree-row-main { min-width: 0; }
+.ttree-row-main strong {
+  display: block;
+  color: #4b4f54;
+  font-size: 13px;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ttree-row-main span {
+  display: block;
+  color: #7a838a;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ttree-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 62px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.ttree-badge.pending { color: #fff; background: #073281; }
+.ttree-badge.ok { color: #fff; background: #278641; }
+.ttree-badge.deny { color: #fff; background: #d84f43; }
+.ttree-badge.cancel { color: #fff; background: #8a949b; }
+.ttree-empty {
+  border: 1px dashed #dbe4e8;
+  border-radius: 4px;
+  padding: 18px 10px;
+  color: #8a949b;
+  font-size: 12px;
+  text-align: center;
+}
+html[data-theme="excel"] .wrap.ttree-mode { background: #777; }
+html[data-theme="excel"] .ttree-modal,
+html[data-theme="excel"] .ttree-status-panel { background: #fff; color: #4b4f54; }
+
+@media (max-width: 860px) {
+  .ttree-shell { grid-template-columns: 1fr; padding: 0 8px 10px; }
+  .ttree-field-row,
+  .ttree-form label { grid-template-columns: 118px minmax(0, 1fr); }
+  .ttree-confirm,
+  .ttree-preview { margin-left: 118px; }
+}
+@media (max-width: 520px) {
+  .ttree-field-row,
+  .ttree-form label { grid-template-columns: 96px minmax(0, 1fr); font-size: 13px; }
+  .ttree-modal-head { padding: 0 14px; }
+  .ttree-modal-body { padding: 16px 10px 12px; }
+  .ttree-confirm,
+  .ttree-preview { margin-left: 96px; }
+}
+
+/* =================== 지출결의서 결재 도우미 패널 =================== */
+#approvalPanel { display: none; }
+.wrap.approval-mode #approvalPanel { display: block; }
+.wrap.approval-mode .settingbar,
+.wrap.approval-mode table#grid,
+.wrap.approval-mode .sumcap,
+.wrap.approval-mode .summary,
+.wrap.approval-mode #statusLine,
+.wrap.approval-mode #mealPanel,
+.wrap.approval-mode #ttreePanel { display: none; }
+
+.apprbar { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.apprheading { font-size: 13px; color: var(--mint); font-weight: 800; letter-spacing: .2px; }
+.apprbody {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); padding: 14px;
+}
+.apprrow { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.apprrow label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 700; }
+.apprsheet {
+  display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+}
+.apprfield { display: flex; align-items: baseline; gap: 10px; font-size: 13px; }
+.apprfield > span { min-width: 72px; color: var(--muted); font-weight: 700; font-size: 12px; }
+.apprfield > code { color: var(--text); font-weight: 700; font-family: inherit; letter-spacing: .2px; }
+.apprnote { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
+.apprnote b { color: var(--time); }
+.appractions { display: flex; justify-content: flex-end; }

@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
@@ -25,6 +25,8 @@
       <div class="spacer"></div>
       <button id="calBtn" class="themebtn" title="그룹웨어 캘린더 일정 보기">캘린더</button>
       <button id="mealBtn" class="themebtn" title="이번 주 식단표 보기">식단</button>
+      <button id="ttreeBtn" class="themebtn" title="TTree 휴가/출장 신청 및 현황">TTree</button>
+      <button id="approvalBtn" class="themebtn" title="지출결의서 기안 도우미">결재</button>
       <button id="themeBtn" class="themebtn" title="다크 / 엑셀 테마 전환">엑셀</button>
       <button id="ehrBtn" class="ehrbtn" title="EHR에서 실제 출퇴근 가져오기">로그인</button>
     </div>
@@ -108,6 +110,125 @@
           <div class="cwh">수</div><div class="cwh">목</div><div class="cwh">금</div><div class="cwh sat">토</div>
         </div>
         <div id="calGrid" class="calgrid"></div>
+      </div>
+    </div>
+
+    <div id="ttreePanel" class="ttreepanel">
+      <div class="ttree-shell">
+        <section class="ttree-modal" aria-label="TTree 신청">
+          <div class="ttree-modal-head">
+            <strong id="ttreeTitle">휴가 신청</strong>
+            <button id="ttreeClose" class="ttree-close" title="닫기">×</button>
+          </div>
+
+          <div class="ttree-modal-body">
+            <div class="ttree-section-title">결재선 정보</div>
+            <div class="ttree-field-row">
+              <label for="ttreeApproval">결재선</label>
+              <select id="ttreeApproval" class="ttree-select"></select>
+            </div>
+            <div class="ttree-field-row ttree-approver-row">
+              <span>결재자 정보</span>
+              <div id="ttreeApprovalDetail" class="ttree-approval"></div>
+            </div>
+
+            <div class="ttree-section-title ttree-request-title">신청 정보</div>
+            <div class="ttree-field-row">
+              <label for="ttreeKind">신청 종류</label>
+              <select id="ttreeKind" class="ttree-select">
+                <option value="leave">휴가</option>
+                <option value="bsrp">출장</option>
+              </select>
+            </div>
+
+            <div id="ttreeLeaveForm" class="ttree-form">
+              <label>휴가 분류<select id="ttreeLeaveClass" class="ttree-select"></select></label>
+              <label>휴가 구분<select id="ttreeLeaveType" class="ttree-select"></select></label>
+              <label>기간<select id="ttreeLeaveRange" class="ttree-select">
+                <option value="DAY">종일</option>
+                <option value="AM_HALF_VAC">오전 반차</option>
+                <option value="PM_HALF_VAC">오후 반차</option>
+                <option value="RANGE">여러 날</option>
+                <option value="CUSTOM">직접 입력</option>
+              </select></label>
+              <label>시작일<input id="ttreeLeaveStart" class="ttree-input" type="date" /></label>
+              <label>시작 시간<input id="ttreeLeaveStartTime" class="ttree-input" placeholder="08:00" /></label>
+              <label>종료일<input id="ttreeLeaveEnd" class="ttree-input" type="date" /></label>
+              <label>종료 시간<input id="ttreeLeaveEndTime" class="ttree-input" placeholder="12:00" /></label>
+              <label>신청 사유<textarea id="ttreeLeaveReason" class="ttree-textarea" rows="3" placeholder="사유를 입력해주세요."></textarea></label>
+            </div>
+
+            <div id="ttreeBsrpForm" class="ttree-form" hidden>
+              <label>구분<select id="ttreeBsrpType" class="ttree-select">
+                <option value="bsrp">출장</option>
+                <option value="edu">교육</option>
+              </select></label>
+              <label>기간<select id="ttreeBsrpRange" class="ttree-select">
+                <option value="DAY">1일</option>
+                <option value="RANGE">기간</option>
+              </select></label>
+              <label>시작일<input id="ttreeBsrpStart" class="ttree-input" type="date" /></label>
+              <label>시작 시간<input id="ttreeBsrpStartTime" class="ttree-input" placeholder="09:00" /></label>
+              <label>종료일<input id="ttreeBsrpEnd" class="ttree-input" type="date" /></label>
+              <label>종료 시간<input id="ttreeBsrpEndTime" class="ttree-input" placeholder="18:00" /></label>
+              <label>업체명<input id="ttreeBsrpCustomer" class="ttree-input" placeholder="업체명을 입력해주세요." /></label>
+              <label>지역<input id="ttreeBsrpLocation" class="ttree-input" placeholder="지역을 입력해주세요." /></label>
+              <label>사유<textarea id="ttreeBsrpReason" class="ttree-textarea" rows="3" placeholder="사유를 입력해주세요."></textarea></label>
+            </div>
+
+            <label class="ttree-confirm"><input id="ttreeConfirm" type="checkbox" /> 실제 TTree에 신청합니다.</label>
+            <pre id="ttreePreviewBox" class="ttree-preview"></pre>
+          </div>
+
+          <div class="ttree-modal-foot">
+            <button id="ttreePreview" class="ttree-soft-btn">미리보기</button>
+            <button id="ttreeSubmit" class="ttree-submit-btn">신청</button>
+            <button id="ttreeCancel" class="ttree-cancel-btn">취소</button>
+          </div>
+        </section>
+
+        <section class="ttree-status-panel" aria-label="TTree 신청 현황">
+          <div class="ttree-modal-head ttree-status-head">
+            <strong>신청 현황</strong>
+            <span id="ttreeCaption" class="ttree-caption"></span>
+          </div>
+          <div class="ttree-status-actions">
+            <button id="ttreeLogin" class="ttree-soft-btn" title="TTree 로그인 세션 저장">로그인</button>
+            <button id="ttreeReload" class="ttree-soft-btn" title="휴가/출장 신청 현황 새로고침">현황 새로고침</button>
+            <button id="ttreeLookupReload" class="ttree-soft-btn" title="휴가 코드와 결재선 다시 불러오기">코드 새로고침</button>
+          </div>
+          <div id="ttreeMessage" class="ttree-message"></div>
+          <div class="ttree-list-wrap">
+            <div class="ttree-status-range" id="ttreeStatusRange"></div>
+            <h4>휴가</h4>
+            <div id="ttreeLeaveList" class="ttree-list"></div>
+            <h4>출장</h4>
+            <div id="ttreeBsrpList" class="ttree-list"></div>
+          </div>
+        </section>
+      </div>
+    </div>
+    <div id="approvalPanel" class="apprpanel">
+      <div class="apprbar">
+        <strong class="apprheading">지출결의서 기안 도우미</strong>
+        <div class="spacer"></div>
+        <span id="apprMsg" class="mealcaption"></span>
+      </div>
+      <div class="apprbody">
+        <div class="apprrow">
+          <label>지출 월<select id="apprMonth" class="ttree-select"></select></label>
+          <label>이름(지급처)<input id="apprName" class="ttree-input" placeholder="본인 이름" /></label>
+          <button id="apprLookup" class="themebtn" title="재무톡톡 게시판에서 지급예정일 파싱">지급일 조회</button>
+        </div>
+        <div class="apprsheet">
+          <div class="apprfield"><span>제목</span><code id="apprTitle">—</code></div>
+          <div class="apprfield"><span>지급처</span><code id="apprPayee">—</code></div>
+          <div class="apprfield"><span>지급요청일</span><code id="apprPayday">—</code> <small id="apprPaySrc" class="mealcaption"></small></div>
+        </div>
+        <div class="apprnote">텍스트 필드(제목·지급처·지급요청일)만 자동 채워집니다. <b>카드내역·검토·제출은 열린 결재 창에서 직접</b> 하세요.</div>
+        <div class="appractions">
+          <button id="apprOpen" class="ehrbtn" title="EHR 세션으로 결재 폼을 열고 자동채움">폼 열고 자동채움</button>
+        </div>
       </div>
     </div>
   </div>

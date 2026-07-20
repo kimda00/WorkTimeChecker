@@ -677,9 +677,9 @@ function ehrButtonClick() {
 
 window.appRefreshEhr = function () { refreshEhr(false); };
 
-/* ---------------- 화면 전환 (근무 / 식단 / 캘린더) ---------------- */
-// 한 창 안에서 근무·식단·캘린더 화면을 서로 배타적으로 전환한다.
-let viewMode = 'work';   // 'work' | 'meal' | 'cal'
+/* ---------------- 화면 전환 ---------------- */
+// 한 창 안에서 근무·식단·캘린더·TTree·결재 화면을 서로 배타적으로 전환한다.
+let viewMode = 'work';   // 'work' | 'meal' | 'cal' | 'ttree' | 'approval'
 let mealCacheLoaded = false;
 
 function setView(mode) {
@@ -688,11 +688,17 @@ function setView(mode) {
   if (wrap) {
     wrap.classList.toggle('meal-mode', mode === 'meal');
     wrap.classList.toggle('cal-mode', mode === 'cal');
+    wrap.classList.toggle('ttree-mode', mode === 'ttree');
+    wrap.classList.toggle('approval-mode', mode === 'approval');
   }
   const mb = document.getElementById('mealBtn');
   const cb = document.getElementById('calBtn');
+  const tb = document.getElementById('ttreeBtn');
+  const ab = document.getElementById('approvalBtn');
   if (mb) mb.textContent = mode === 'meal' ? '근무' : '식단';
   if (cb) cb.textContent = mode === 'cal' ? '근무' : '캘린더';
+  if (tb) tb.textContent = mode === 'ttree' ? '근무' : 'TTree';
+  if (ab) ab.textContent = mode === 'approval' ? '근무' : '결재';
 }
 
 function toggleMeal() {
@@ -1088,6 +1094,354 @@ function calGoMonth(mm) {
   scheduleCalFetch(350);          // 연타가 멈춘 뒤에 한 번만 최신 조회
 }
 
+/* ---------------- TTree 휴가/출장 ---------------- */
+let ttreeLookupsLoaded = false;
+let ttreeLookups = null;
+let ttreeBusy = false;
+
+function apiReady(name) {
+  return window.pywebview && pywebview.api && pywebview.api[name];
+}
+function setTtreeMessage(msg, cls) {
+  const el = document.getElementById('ttreeMessage');
+  if (!el) return;
+  el.className = 'ttree-message' + (cls ? ' ' + cls : '');
+  el.textContent = msg || '';
+}
+function setTtreeBusy(busy) {
+  ttreeBusy = busy;
+  ['ttreeLogin', 'ttreeReload', 'ttreeLookupReload', 'ttreePreview', 'ttreeSubmit'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = busy;
+  });
+}
+function setTtreeMode(on) {
+  setView(on ? 'ttree' : 'work');
+}
+function toggleTtree() {
+  const opening = viewMode !== 'ttree';
+  setTtreeMode(opening);
+  if (opening) {
+    setTtreeDefaults();
+    if (!ttreeLookupsLoaded) loadTtreeLookups();
+    loadTtreeStatus();
+  }
+}
+function todayYmdInput() { return ymd(new Date()); }
+function compactTimeForTtree(v) {
+  const s = parseTimeToSec(v);
+  if (s === null) return '';
+  return fmt24(s);
+}
+function ttreePresetTime(key, fallback) {
+  const p = (ttreeLookups && ttreeLookups.preset) || {};
+  const v = p[key];
+  if (v && String(v).length >= 4) return String(v).slice(0, 2) + ':' + String(v).slice(2, 4);
+  return fallback;
+}
+function setTtreeDefaults() {
+  const today = todayYmdInput();
+  ['ttreeLeaveStart', 'ttreeLeaveEnd', 'ttreeBsrpStart', 'ttreeBsrpEnd'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && !el.value) el.value = today;
+  });
+  const bsrpStart = document.getElementById('ttreeBsrpStartTime');
+  const bsrpEnd = document.getElementById('ttreeBsrpEndTime');
+  if (bsrpStart && !bsrpStart.value) bsrpStart.value = '09:00';
+  if (bsrpEnd && !bsrpEnd.value) bsrpEnd.value = '18:00';
+  applyTtreeRangeTimes();
+}
+function fillSelect(sel, items, valueKey, textKey, emptyText) {
+  if (!sel) return;
+  sel.innerHTML = '';
+  if (emptyText) {
+    const opt = document.createElement('option');
+    opt.value = ''; opt.textContent = emptyText;
+    sel.appendChild(opt);
+  }
+  (items || []).forEach(item => {
+    const opt = document.createElement('option');
+    opt.value = item[valueKey] || '';
+    opt.textContent = item[textKey] || item[valueKey] || '';
+    if (item.approvalLineName) opt.dataset.approvalLineName = item.approvalLineName;
+    if (item.rangeTypeJson) opt.dataset.rangeTypeJson = item.rangeTypeJson;
+    sel.appendChild(opt);
+  });
+}
+function populateTtreeLookups(res) {
+  ttreeLookups = res;
+  ttreeLookupsLoaded = true;
+  const cap = document.getElementById('ttreeCaption');
+  if (cap && res.user) cap.textContent = (res.user.userName || res.user.userId || '') + ' · ' + (res.user.deptName || '');
+  const classSel = document.getElementById('ttreeLeaveClass');
+  fillSelect(classSel, res.leaveClasses || [], 'code', 'name', '휴가 분류 선택');
+  updateTtreeLeaveTypes();
+  const approvalSel = document.getElementById('ttreeApproval');
+  fillSelect(approvalSel, res.approvals || [], 'id', 'name', '결재선 선택');
+  renderTtreeApprovalDetail();
+  setTtreeDefaults();
+}
+async function loadTtreeLookups() {
+  if (ttreeBusy) return;
+  setTtreeBusy(true);
+  setTtreeMessage('TTree 코드/결재선 불러오는 중...');
+  let res = null;
+  try {
+    res = apiReady('ttree_lookups') ? await pywebview.api.ttree_lookups() : { status: 'error', message: '앱 브리지 없음' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setTtreeBusy(false);
+  if (res && res.status === 'ok') {
+    populateTtreeLookups(res);
+    setTtreeMessage('TTree 코드/결재선 로딩 완료', 'ok');
+  } else if (res && res.status === 'login_required') {
+    setTtreeMessage((res && res.message) || 'TTree 로그인이 필요합니다. 로그인 버튼을 눌러 주세요.', 'err');
+  } else {
+    setTtreeMessage('TTree 코드 로딩 실패: ' + ((res && res.message) || '알 수 없음'), 'err');
+  }
+}
+async function doTtreeLogin() {
+  if (ttreeBusy) return;
+  setTtreeBusy(true);
+  setTtreeMessage('열린 브라우저에서 TTree에 로그인해 주세요.');
+  let res = null;
+  try {
+    res = apiReady('ttree_login') ? await pywebview.api.ttree_login() : { status: 'error', message: '앱 브리지 없음' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setTtreeBusy(false);
+  if (res && res.status === 'ok') {
+    setTtreeMessage('TTree 로그인 완료. 코드와 현황을 다시 불러옵니다.', 'ok');
+    ttreeLookupsLoaded = false;
+    await loadTtreeLookups();
+    await loadTtreeStatus();
+  } else if (res && res.status === 'login_required') {
+    setTtreeMessage(res.message || 'TTree 로그인 후 다시 시도해 주세요.', 'err');
+  } else if (res && res.status === 'cancelled') {
+    setTtreeMessage('TTree 로그인이 취소되었습니다.');
+  } else {
+    setTtreeMessage('TTree 로그인 실패: ' + ((res && res.message) || '알 수 없음'), 'err');
+  }
+}
+function statusClass(code) {
+  code = String(code || '');
+  if (code === '900') return 'ok';
+  if (code === '800') return 'deny';
+  if (code === '999') return 'cancel';
+  return 'pending';
+}
+function ttreePeriod(item) {
+  const d = item.startDate === item.endDate ? item.startDate : (item.startDate + ' ~ ' + item.endDate);
+  const t = item.startTime || item.endTime ? ' ' + [item.startTime, item.endTime].filter(Boolean).join('~') : '';
+  return (d || '-') + t;
+}
+function renderTtreeList(id, items, emptyText) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  box.innerHTML = '';
+  if (!items || !items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'ttree-empty';
+    empty.textContent = emptyText;
+    box.appendChild(empty);
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement('div');
+    row.className = 'ttree-row';
+    const main = document.createElement('div');
+    main.className = 'ttree-row-main';
+    const title = document.createElement('strong');
+    title.textContent = item.title || '-';
+    const sub = document.createElement('span');
+    const extras = [ttreePeriod(item), item.dayCount ? item.dayCount + '일' : '', item.customer || '', item.location || '', item.reason || ''].filter(Boolean);
+    sub.textContent = extras.join(' · ');
+    main.appendChild(title); main.appendChild(sub);
+    const badge = document.createElement('span');
+    badge.className = 'ttree-badge ' + statusClass(item.statusCode);
+    badge.textContent = item.statusName || item.statusCode || '-';
+    row.appendChild(main); row.appendChild(badge);
+    box.appendChild(row);
+  });
+}
+async function loadTtreeStatus() {
+  if (ttreeBusy) return;
+  setTtreeBusy(true);
+  setTtreeMessage('TTree 신청 현황 조회 중...');
+  let res = null;
+  try {
+    res = apiReady('ttree_status') ? await pywebview.api.ttree_status() : { status: 'error', message: '앱 브리지 없음' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setTtreeBusy(false);
+  if (res && res.status === 'ok') {
+    renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
+    renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
+    const range = document.getElementById('ttreeStatusRange');
+    if (range && res.range) range.textContent = res.range.begin + ' ~ ' + res.range.end;
+    setTtreeMessage('TTree 신청 현황 조회 완료', 'ok');
+  } else if (res && res.status === 'login_required') {
+    setTtreeMessage((res && res.message) || 'TTree 로그인이 필요합니다. 로그인 버튼을 눌러 주세요.', 'err');
+  } else {
+    setTtreeMessage('TTree 현황 조회 실패: ' + ((res && res.message) || '알 수 없음'), 'err');
+  }
+}
+function updateTtreeLeaveTypes() {
+  const classCode = document.getElementById('ttreeLeaveClass')?.value || '';
+  const cl = ((ttreeLookups && ttreeLookups.leaveClasses) || []).find(x => x.code === classCode);
+  fillSelect(document.getElementById('ttreeLeaveType'), cl ? cl.types : [], 'code', 'name', '휴가 구분 선택');
+  fixTtreeApprovalByLeaveType();
+}
+function fixTtreeApprovalByLeaveType() {
+  const typeSel = document.getElementById('ttreeLeaveType');
+  const approvalSel = document.getElementById('ttreeApproval');
+  if (!typeSel || !approvalSel) return;
+  const opt = typeSel.options[typeSel.selectedIndex];
+  const name = opt && opt.dataset.approvalLineName;
+  if (!name) return;
+  for (const option of approvalSel.options) {
+    if (option.textContent === name) {
+      approvalSel.value = option.value;
+      break;
+    }
+  }
+  renderTtreeApprovalDetail();
+}
+function renderTtreeApprovalDetail() {
+  const box = document.getElementById('ttreeApprovalDetail');
+  const id = document.getElementById('ttreeApproval')?.value || '';
+  if (!box) return;
+  const line = ((ttreeLookups && ttreeLookups.approvals) || []).find(x => x.id === id);
+  if (!line || !line.details || !line.details.length) {
+    box.textContent = '';
+    return;
+  }
+  box.textContent = line.details.map(d => (d.ordNo || '') + '차 ' + (d.userName || d.userId || '')).join(' → ');
+}
+function applyTtreeKind() {
+  const kind = document.getElementById('ttreeKind')?.value || 'leave';
+  const leave = document.getElementById('ttreeLeaveForm');
+  const bsrp = document.getElementById('ttreeBsrpForm');
+  const title = document.getElementById('ttreeTitle');
+  if (leave) leave.hidden = kind !== 'leave';
+  if (bsrp) bsrp.hidden = kind !== 'bsrp';
+  if (title) title.textContent = kind === 'leave' ? '휴가 신청' : '출장 신청';
+  applyTtreeBsrpRange();
+}
+function closeTtreePanel() {
+  setTtreeMode(false);
+}
+function applyTtreeBsrpRange() {
+  const range = document.getElementById('ttreeBsrpRange')?.value || 'DAY';
+  const startDate = document.getElementById('ttreeBsrpStart');
+  const endDate = document.getElementById('ttreeBsrpEnd');
+  if (!endDate || !startDate) return;
+  if (range !== 'RANGE') {
+    endDate.value = startDate.value;
+    endDate.disabled = true;
+  } else {
+    endDate.disabled = false;
+  }
+}
+function applyTtreeRangeTimes() {
+  const range = document.getElementById('ttreeLeaveRange')?.value || 'DAY';
+  const start = document.getElementById('ttreeLeaveStartTime');
+  const end = document.getElementById('ttreeLeaveEndTime');
+  const endDate = document.getElementById('ttreeLeaveEnd');
+  const startDate = document.getElementById('ttreeLeaveStart');
+  if (!start || !end) return;
+  if (range === 'AM_HALF_VAC') {
+    start.value = ttreePresetTime('amHalfVacBgnTime', '08:00');
+    end.value = ttreePresetTime('amHalfVacEndTime', '12:00');
+  } else if (range === 'PM_HALF_VAC') {
+    start.value = ttreePresetTime('pmHalfVacBgnTime', '13:00');
+    end.value = ttreePresetTime('pmHalfVacEndTime', '17:00');
+  } else if (range === 'DAY' || range === 'RANGE') {
+    start.value = ttreePresetTime('vacBgnTime', '08:00');
+    end.value = ttreePresetTime('vacEndTime', '17:00');
+  }
+  const custom = range === 'CUSTOM';
+  start.disabled = !custom && (range === 'DAY' || range === 'RANGE');
+  end.disabled = !custom && (range === 'DAY' || range === 'RANGE');
+  if (range !== 'RANGE' && endDate && startDate) endDate.value = startDate.value;
+  if (endDate) endDate.disabled = range !== 'RANGE';
+}
+function collectTtreeLeaveDraft() {
+  return {
+    vcatnClCd: document.getElementById('ttreeLeaveClass')?.value || '',
+    vcatnSeCd: document.getElementById('ttreeLeaveType')?.value || '',
+    rangeCode: document.getElementById('ttreeLeaveRange')?.value || 'DAY',
+    startDate: document.getElementById('ttreeLeaveStart')?.value || '',
+    endDate: document.getElementById('ttreeLeaveEnd')?.value || '',
+    startTime: compactTimeForTtree(document.getElementById('ttreeLeaveStartTime')?.value || ''),
+    endTime: compactTimeForTtree(document.getElementById('ttreeLeaveEndTime')?.value || ''),
+    reason: document.getElementById('ttreeLeaveReason')?.value || '',
+    sanctnId: document.getElementById('ttreeApproval')?.value || '',
+  };
+}
+function collectTtreeBsrpDraft() {
+  applyTtreeBsrpRange();
+  return {
+    bsrpType: document.getElementById('ttreeBsrpType')?.value || 'bsrp',
+    startDate: document.getElementById('ttreeBsrpStart')?.value || '',
+    endDate: document.getElementById('ttreeBsrpEnd')?.value || '',
+    startTime: compactTimeForTtree(document.getElementById('ttreeBsrpStartTime')?.value || ''),
+    endTime: compactTimeForTtree(document.getElementById('ttreeBsrpEndTime')?.value || ''),
+    customer: document.getElementById('ttreeBsrpCustomer')?.value || '',
+    location: document.getElementById('ttreeBsrpLocation')?.value || '',
+    reason: document.getElementById('ttreeBsrpReason')?.value || '',
+    sanctnId: document.getElementById('ttreeApproval')?.value || '',
+  };
+}
+function currentTtreeDraft() {
+  return (document.getElementById('ttreeKind')?.value || 'leave') === 'leave' ? collectTtreeLeaveDraft() : collectTtreeBsrpDraft();
+}
+function showTtreePreview(res) {
+  const box = document.getElementById('ttreePreviewBox');
+  if (!box) return;
+  if (!res || res.status !== 'ok') {
+    box.textContent = '오류: ' + ((res && res.message) || '알 수 없음');
+    return;
+  }
+  box.textContent = res.endpoint + '\n' + res.contentType + '\n\n' + JSON.stringify(res.payload, null, 2);
+}
+async function previewTtreeRequest() {
+  const kind = document.getElementById('ttreeKind')?.value || 'leave';
+  const draft = currentTtreeDraft();
+  let res = null;
+  try {
+    if (kind === 'leave') res = apiReady('ttree_preview_leave') ? await pywebview.api.ttree_preview_leave(draft) : { status: 'error', message: '앱 브리지 없음' };
+    else res = apiReady('ttree_preview_bsrp') ? await pywebview.api.ttree_preview_bsrp(draft) : { status: 'error', message: '앱 브리지 없음' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  showTtreePreview(res);
+  setTtreeMessage(res && res.status === 'ok' ? '미리보기 생성 완료' : '미리보기 실패: ' + ((res && res.message) || '알 수 없음'), res && res.status === 'ok' ? 'ok' : 'err');
+}
+async function submitTtreeRequest() {
+  if (!document.getElementById('ttreeConfirm')?.checked) {
+    setTtreeMessage('실제 신청 전 확인 체크박스를 선택해 주세요.', 'err');
+    return;
+  }
+  const kind = document.getElementById('ttreeKind')?.value || 'leave';
+  const label = kind === 'leave' ? '휴가' : '출장';
+  if (!window.confirm('TTree에 실제 ' + label + ' 신청을 등록할까요?')) return;
+  setTtreeBusy(true);
+  setTtreeMessage('TTree에 실제 ' + label + ' 신청 전송 중...');
+  let res = null;
+  const draft = currentTtreeDraft();
+  try {
+    if (kind === 'leave') res = apiReady('ttree_submit_leave') ? await pywebview.api.ttree_submit_leave(draft) : { status: 'error', message: '앱 브리지 없음' };
+    else res = apiReady('ttree_submit_bsrp') ? await pywebview.api.ttree_submit_bsrp(draft) : { status: 'error', message: '앱 브리지 없음' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setTtreeBusy(false);
+  if (res && res.status === 'ok') {
+    document.getElementById('ttreeConfirm').checked = false;
+    showTtreePreview({ status: 'ok', endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: kind === 'leave' ? 'application/json' : 'application/x-www-form-urlencoded', payload: res.payload || {} });
+    setTtreeMessage((res.message || label + ' 신청 완료') + ' · 현황을 다시 조회합니다.', 'ok');
+    loadTtreeStatus();
+  } else if (res && res.status === 'duplicate') {
+    showTtreePreview({ status: 'ok', endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: '', payload: res.payload || {} });
+    setTtreeMessage(res.message || '중복 신청으로 전송하지 않았습니다.', 'err');
+  } else {
+    setTtreeMessage(label + ' 신청 실패: ' + ((res && res.message) || '알 수 없음'), 'err');
+  }
+}
 /* ---------------- init ---------------- */
 async function loadState() {
   let loaded = null;
@@ -1130,6 +1484,102 @@ function rerenderWeek() {
   recompute();
 }
 
+/* ---------------- 지출결의서 결재 도우미 ---------------- */
+let approvalInit = false;
+let approvalPayday = null;
+let approvalPaySrc = '';
+
+function setApprovalMode(on) {
+  setView(on ? 'approval' : 'work');
+}
+
+function toggleApproval() {
+  const opening = viewMode !== 'approval';
+  setApprovalMode(opening);
+  if (opening && !approvalInit) { approvalInit = true; initApprovalPanel(); }
+  if (opening) refreshApprovalSheet();
+}
+
+function initApprovalPanel() {
+  const sel = document.getElementById('apprMonth');
+  if (sel && !sel.options.length) {
+    for (let m = 1; m <= 12; m++) {
+      const o = document.createElement('option'); o.value = m; o.textContent = m + '월'; sel.appendChild(o);
+    }
+    sel.value = String(new Date().getMonth() + 1);
+  }
+  const nameInp = document.getElementById('apprName');
+  if (nameInp && state && state.settings) nameInp.value = state.settings.approvalName || '';
+  if (sel) sel.addEventListener('change', () => { approvalPayday = null; approvalPaySrc = ''; refreshApprovalSheet(); });
+  if (nameInp) nameInp.addEventListener('input', () => {
+    if (state && state.settings) { state.settings.approvalName = nameInp.value.trim(); scheduleSave(); }
+    refreshApprovalSheet();
+  });
+}
+
+function apprTitleText(month, name) {
+  return month + '월 지출결의서(개인경비) - ' + (name && name.trim() ? name.trim() : '000');
+}
+
+function refreshApprovalSheet() {
+  const month = parseInt(document.getElementById('apprMonth').value, 10) || (new Date().getMonth() + 1);
+  const name = (document.getElementById('apprName').value || '').trim();
+  document.getElementById('apprTitle').textContent = apprTitleText(month, name);
+  document.getElementById('apprPayee').textContent = name || '—';
+  document.getElementById('apprPayday').textContent = approvalPayday || '—';
+  document.getElementById('apprPaySrc').textContent = approvalPaySrc || '';
+}
+
+function setApprMsg(msg, cls) {
+  const el = document.getElementById('apprMsg');
+  if (el) { el.textContent = msg || ''; el.className = 'mealcaption' + (cls ? ' ' + cls : ''); }
+}
+function setApprBusy(busy) {
+  ['apprLookup', 'apprOpen'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+}
+
+async function lookupApprovalPayday() {
+  const month = parseInt(document.getElementById('apprMonth').value, 10);
+  setApprBusy(true); setApprMsg('지급예정일 조회 중…');
+  let res = null;
+  try {
+    if (apiReady('approval_payday')) res = await pywebview.api.approval_payday(month);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시.', 'err'); return; }
+  if (res.status === 'ok' && res.payday) {
+    approvalPayday = res.payday;
+    approvalPaySrc = res.sourceTitle ? '(' + res.sourceTitle + ')' : '';
+    setApprMsg('지급예정일 조회 완료', 'ok');
+  } else if (res.status === 'not_found') {
+    approvalPayday = null; approvalPaySrc = ''; setApprMsg(res.message || '지급일정 공지를 못 찾았어요.', 'err');
+  } else if (res.status === 'no_date') {
+    approvalPayday = null; setApprMsg('공지에서 개인경비 날짜를 못 찾았어요 — 직접 확인해주세요.', 'err');
+  } else { setApprMsg('조회 실패: ' + (res.message || '알 수 없음'), 'err'); }
+  refreshApprovalSheet();
+}
+
+async function openApprovalForm() {
+  const month = parseInt(document.getElementById('apprMonth').value, 10);
+  const name = (document.getElementById('apprName').value || '').trim();
+  if (approvalPayday == null) await lookupApprovalPayday();   // 없으면 먼저 조회
+  const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '' };
+  setApprBusy(true); setApprMsg('결재 폼 여는 중… 열린 창에서 검토·카드입력·제출하세요.');
+  let res = null;
+  try {
+    if (apiReady('approval_prefill')) res = await pywebview.api.approval_prefill(payload);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  if (!res) { setApprMsg('실패', 'err'); return; }
+  if (res.status === 'login_required') setApprMsg('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시.', 'err');
+  else if (res.status === 'started') setApprMsg((res.message || '결재 창을 열었어요.') + ' 열린 창에서 카드내역·검토·제출을 진행하세요.', 'ok');
+  else if (res.status === 'ok') setApprMsg('폼 창을 닫았어요. (자동채움 ' + (res.filled && res.filled.title ? '완료' : '일부') + ')', 'ok');
+  else setApprMsg('실패: ' + (res.message || '알 수 없음'), 'err');
+}
+
+
 async function init() {
   if (started) return;
   started = true;
@@ -1151,6 +1601,25 @@ async function init() {
   document.getElementById('calPrev').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, -1)));
   document.getElementById('calNext').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, 1)));
   document.getElementById('calToday').addEventListener('click', () => calGoMonth(calCurrentMonth()));
+  document.getElementById('ttreeBtn').addEventListener('click', toggleTtree);
+  document.getElementById('ttreeClose').addEventListener('click', closeTtreePanel);
+  document.getElementById('ttreeCancel').addEventListener('click', closeTtreePanel);
+  document.getElementById('ttreeLogin').addEventListener('click', doTtreeLogin);
+  document.getElementById('ttreeReload').addEventListener('click', loadTtreeStatus);
+  document.getElementById('ttreeLookupReload').addEventListener('click', loadTtreeLookups);
+  document.getElementById('ttreeKind').addEventListener('change', applyTtreeKind);
+  document.getElementById('ttreeLeaveClass').addEventListener('change', updateTtreeLeaveTypes);
+  document.getElementById('ttreeLeaveType').addEventListener('change', fixTtreeApprovalByLeaveType);
+  document.getElementById('ttreeLeaveRange').addEventListener('change', applyTtreeRangeTimes);
+  document.getElementById('ttreeLeaveStart').addEventListener('change', applyTtreeRangeTimes);
+  document.getElementById('ttreeBsrpRange').addEventListener('change', applyTtreeBsrpRange);
+  document.getElementById('ttreeBsrpStart').addEventListener('change', applyTtreeBsrpRange);
+  document.getElementById('ttreeApproval').addEventListener('change', renderTtreeApprovalDetail);
+  document.getElementById('ttreePreview').addEventListener('click', previewTtreeRequest);
+  document.getElementById('ttreeSubmit').addEventListener('click', submitTtreeRequest);
+  document.getElementById('approvalBtn').addEventListener('click', toggleApproval);
+  document.getElementById('apprLookup').addEventListener('click', lookupApprovalPayday);
+  document.getElementById('apprOpen').addEventListener('click', openApprovalForm);
   bindFormulaBar();
   const defaultIn = document.getElementById('defaultIn');
   if (defaultIn) {

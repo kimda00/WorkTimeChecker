@@ -46,6 +46,8 @@ UI = os.path.join(resource_dir(), "ui", "index.html")
 EHR_PY = os.path.join(BASE, "ehr.py")
 MEAL_PY = os.path.join(BASE, "meal.py")
 # 캘린더는 쿠키 HTTP(브라우저 없음)라 별도 프로세스 없이 인-프로세스로 처리(cal.fetch).
+TTREE_PY = os.path.join(BASE, "ttree.py")
+APPROVAL_PY = os.path.join(BASE, "approval.py")
 
 # EHR(Playwright) 작업은 콘솔 stdio가 있는 별도 프로세스로 실행한다.
 # pythonw.exe(콘솔 없음)에서 헤드풀 크롬을 직접 spawn 하면 "spawn UNKNOWN"이 나기 때문.
@@ -117,6 +119,170 @@ def _run_ehr(cmd, timeout):
     flag = "--ehr-login" if cmd == "loginjson" else "--ehr-fetch"
     return _run_pw(cmd, EHR_PY, flag, timeout)
 
+def _run_ttree(cmd, timeout, payload=None):
+    """Run TTree Playwright/API work in a console-capable helper process."""
+    flag_map = {
+        "loginjson": "--ttree-login",
+        "statusjson": "--ttree-status",
+        "lookupsjson": "--ttree-lookups",
+        "submitleavejson": "--ttree-submit-leave",
+        "submitbsrpjson": "--ttree-submit-bsrp",
+    }
+    flag = flag_map.get(cmd)
+    if getattr(sys, "frozen", False):
+        import tempfile
+        tf = os.path.join(tempfile.gettempdir(), "worktime_%s_%d.json" % (cmd, os.getpid()))
+        inf = None
+        try:
+            args = [sys.executable, flag, tf]
+            if payload is not None:
+                fd, inf = tempfile.mkstemp(prefix="worktime_ttree_", suffix=".json")
+                os.close(fd)
+                with open(inf, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                args.append(inf)
+            subprocess.run(
+                args,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                creationflags=_CREATE_NO_WINDOW,
+                timeout=timeout,
+            )
+            with open(tf, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "처리 시간 초과"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        finally:
+            for p in (tf, inf):
+                if p:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+    try:
+        proc = subprocess.run(
+            [_PY, TTREE_PY, cmd],
+            cwd=BASE,
+            input=json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+            stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=_CREATE_NO_WINDOW,
+            timeout=timeout,
+        )
+        out = (proc.stdout or "").strip()
+        for line in reversed(out.splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                return json.loads(line)
+        msg = (proc.stderr or out or "출력 없음").strip()
+        return {"status": "error", "message": msg[:300]}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "처리 시간 초과"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def _run_approval(cmd, timeout, payload=None):
+    """전자결재 도우미(approval.py) 작업을 별도 프로세스로 실행. payload 는 stdin(dev)/임시파일(frozen)로 전달."""
+    flag_map = {"paydayjson": "--approval-payday", "prefilljson": "--approval-prefill"}
+    flag = flag_map.get(cmd)
+    if getattr(sys, "frozen", False):
+        import tempfile
+        tf = os.path.join(tempfile.gettempdir(), "worktime_%s_%d.json" % (cmd, os.getpid()))
+        inf = None
+        try:
+            args = [sys.executable, flag, tf]
+            if payload is not None:
+                fd, inf = tempfile.mkstemp(prefix="worktime_appr_", suffix=".json")
+                os.close(fd)
+                with open(inf, "w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False)
+                args.append(inf)
+            subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
+                           creationflags=_CREATE_NO_WINDOW, timeout=timeout)
+            with open(tf, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": "처리 시간 초과"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+        finally:
+            for p in (tf, inf):
+                if p:
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+    try:
+        kwargs = dict(cwd=BASE, capture_output=True, text=True, encoding="utf-8",
+                      errors="replace", creationflags=_CREATE_NO_WINDOW, timeout=timeout)
+        if payload is not None:
+            kwargs["input"] = json.dumps(payload, ensure_ascii=False)   # input 이 stdin=PIPE 를 함의
+        else:
+            kwargs["stdin"] = subprocess.DEVNULL
+        proc = subprocess.run([_PY, APPROVAL_PY, cmd], **kwargs)
+        out = (proc.stdout or "").strip()
+        for line in reversed(out.splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                return json.loads(line)
+        msg = (proc.stderr or out or "출력 없음").strip()
+        return {"status": "error", "message": msg[:300]}
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "처리 시간 초과"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def _run_approval_prefill_background(payload=None):
+    """결재 폼은 열린 창을 오래 유지하므로 helper만 띄우고 메인 UI는 바로 반환한다."""
+    try:
+        import ehr
+        if not os.path.exists(ehr.STATE):
+            return {"status": "login_required", "message": "EHR 로그인이 필요해요."}
+    except Exception:
+        pass
+
+    payload = payload or {}
+    try:
+        if getattr(sys, "frozen", False):
+            import tempfile
+            fd, inf = tempfile.mkstemp(prefix="worktime_appr_bg_", suffix=".json")
+            os.close(fd)
+            with open(inf, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            subprocess.Popen(
+                [sys.executable, "--approval-prefill-bg", inf],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=_CREATE_NO_WINDOW,
+            )
+        else:
+            proc = subprocess.Popen(
+                [_PY, APPROVAL_PY, "prefilljson"],
+                cwd=BASE,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                creationflags=_CREATE_NO_WINDOW,
+            )
+            if proc.stdin:
+                proc.stdin.write(json.dumps(payload, ensure_ascii=False))
+                proc.stdin.close()
+        return {"status": "started", "message": "결재 창을 열고 자동채움을 시작했어요."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 DEFAULT = {
     "settings": {
         "dailyTarget": 28800,   # 8h
@@ -175,6 +341,39 @@ class Api:
         """게시판 최신 주간식단표 조회 (별도 프로세스). 반환에 image(data URI) 포함."""
         return _run_pw("mealjson", MEAL_PY, "--meal-fetch", timeout=150)
 
+
+    def ttree_login(self):
+        """Open a browser for TTree login and save the session."""
+        return _run_ttree("loginjson", timeout=660)
+
+    def ttree_status(self):
+        """Fetch my leave/business-trip application status from TTree."""
+        return _run_ttree("statusjson", timeout=150)
+
+    def ttree_lookups(self):
+        """Fetch TTree leave codes, approval lines, and work preset."""
+        return _run_ttree("lookupsjson", timeout=150)
+
+    def ttree_preview_leave(self, data):
+        try:
+            import ttree
+            return ttree.preview_leave(data or {})
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def ttree_preview_bsrp(self, data):
+        try:
+            import ttree
+            return ttree.preview_bsrp(data or {})
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def ttree_submit_leave(self, data):
+        return _run_ttree("submitleavejson", timeout=150, payload=data or {})
+
+    def ttree_submit_bsrp(self, data):
+        return _run_ttree("submitbsrpjson", timeout=150, payload=data or {})
+
     def load_meal(self):
         """네트워크 없이 저장된 최신 식단 이미지를 반환(앱 진입 시 즉시 표시)."""
         try:
@@ -211,6 +410,22 @@ class Api:
         except Exception:
             pass
         return False
+
+    def approval_title(self, month, name=""):
+        """지출결의서 제목 조립(로컬)."""
+        try:
+            import approval
+            return approval.compose_title(month, name or "")
+        except Exception:
+            return "%s월 지출결의서(개인경비) - 000" % month
+
+    def approval_payday(self, month):
+        """지출월의 지급예정일을 재무톡톡 게시판에서 파싱(읽기, 별도 프로세스)."""
+        return _run_approval("paydayjson", timeout=150, payload={"month": month})
+
+    def approval_prefill(self, data):
+        """결재 폼을 헤드풀로 열고 텍스트 필드 자동채움. 메인 UI는 기다리지 않는다."""
+        return _run_approval_prefill_background(data or {})
 
     def holidays(self, years):
         """한국 공휴일(대체공휴일 포함). 반환: {'YYYY-MM-DD': '이름', ...}"""
@@ -368,10 +583,56 @@ def main():
 
 def _maybe_run_ehr_mode():
     """exe(frozen)에서 _run_pw 가 자기 자신을 재실행한 경우: GUI 대신 작업 수행 후 종료."""
-    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch"):
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--ttree-login", "--ttree-status", "--ttree-lookups", "--ttree-submit-leave", "--ttree-submit-bsrp", "--approval-payday", "--approval-prefill", "--approval-prefill-bg"):
+        if sys.argv[1] == "--approval-prefill-bg":
+            import approval
+            payload = {}
+            try:
+                with open(sys.argv[2], "r", encoding="utf-8") as f:
+                    payload = json.load(f)
+            except Exception:
+                payload = {}
+            try:
+                os.remove(sys.argv[2])
+            except Exception:
+                pass
+            approval.prefill(payload)
+            sys.exit(0)
         if sys.argv[1] == "--meal-fetch":
             import meal
             res = meal.fetch()
+        elif sys.argv[1].startswith("--approval"):
+            import approval
+            payload = {}
+            if len(sys.argv) >= 4:
+                try:
+                    with open(sys.argv[3], "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                except Exception:
+                    payload = {}
+            if sys.argv[1] == "--approval-payday":
+                res = approval.fetch_payday(int(payload.get("month") or 1))
+            else:
+                res = approval.prefill(payload)
+        elif sys.argv[1].startswith("--ttree"):
+            import ttree
+            payload = {}
+            if len(sys.argv) >= 4:
+                try:
+                    with open(sys.argv[3], "r", encoding="utf-8") as f:
+                        payload = json.load(f)
+                except Exception:
+                    payload = {}
+            if sys.argv[1] == "--ttree-login":
+                res = ttree.login()
+            elif sys.argv[1] == "--ttree-status":
+                res = ttree.fetch_status()
+            elif sys.argv[1] == "--ttree-lookups":
+                res = ttree.fetch_lookups()
+            elif sys.argv[1] == "--ttree-submit-leave":
+                res = ttree.submit_leave(payload)
+            else:
+                res = ttree.submit_bsrp(payload)
         else:
             import ehr
             res = ehr.login() if sys.argv[1] == "--ehr-login" else ehr.fetch()

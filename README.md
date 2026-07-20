@@ -65,6 +65,7 @@
 
 - 입력값/세션 저장: 개발 시 폴더 안(`data.json`·`.ehr_state.json`), exe 배포 시 `%APPDATA%\worktime\`
 - 계산: `근무 = (퇴근−출근) − 점심(12:00~13:00 겹치는 만큼)`, 주 목표 40h(`settings.weeklyTarget`)
+- TTree API 조사/DDD 문서: [`docs/ttree-api-discovery.md`](docs/ttree-api-discovery.md), [`docs/ttree-ddd-architecture.md`](docs/ttree-ddd-architecture.md)
 
 ## 개발 환경
 ```powershell

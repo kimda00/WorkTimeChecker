@@ -1,4 +1,4 @@
-# Build the app into a single exe: dist\WorkTime.exe
+﻿# Build the app into a single exe: dist\WorkTime.exe
 # Run this (or build.bat) after changing code/UI to regenerate the exe.
 # (ASCII-only on purpose: Windows PowerShell 5.1 misparses UTF-8 Hangul without a BOM.)
 $ErrorActionPreference = "Stop"
@@ -38,6 +38,8 @@ $pyinstallerArgs = @(
   "--hidden-import", "ehr",
   "--hidden-import", "meal",
   "--hidden-import", "cal",
+  "--hidden-import", "ttree",
+  "--hidden-import", "approval",
   "--hidden-import", "pystray._win32",
   "--hidden-import", "clr",
   "--distpath", "$dir\dist",

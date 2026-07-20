@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 .venv/
 __pycache__/
 *.pyc
@@ -13,6 +13,7 @@ config.json
 data.json
 data.json.tmp
 .ehr_state.json
+.ttree_state.json
 .browser_profile/
 meal/
 calendar/
@@ -22,3 +23,6 @@ tools/probe_*_out.json
 _*.png
 *.tmp
 Thumbs.db
+
+ttree_debug_profile/
+tup

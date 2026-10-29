@@ -244,12 +244,24 @@ function creditSec(cell, settings) {
 function targetSec(cell, settings) {
   return settings.dailyTarget;
 }
+// 회색 기본 예정은 저장하지 않는다. 퇴근이 입력된 날에만 출근 대체값으로 사용한다.
+function plannedStartSec(cell, settings) {
+  const start = parseTimeToSec(cell.in);
+  if (start !== null) return start;
+  if (cell.type === '오전반차') return 13 * 3600;
+  return parseTimeToSec(settings.defaultIn);
+}
+function effectiveStartSec(cell, settings) {
+  const start = parseTimeToSec(cell.in);
+  if (start !== null || parseTimeToSec(cell.out) === null) return start;
+  return plannedStartSec(cell, settings);
+}
 // end: 사용할 종료 시각(초). 미체크아웃 + 오늘이면 현재시각, 과거면 null.
 function workedSec(cell, settings, end) {
   const t = cell.type;
   if (t === '연차' || t === '공휴일' || t === '휴일') return settings.dailyTarget;
   const credit = creditSec(cell, settings);            // 반차 4h 자동 인정
-  const inS = parseTimeToSec(cell.in);
+  const inS = effectiveStartSec(cell, settings);
   let base = null;                                      // 실제 출퇴근으로 계산한 근무분
   if (inS !== null) {
     const outS = parseTimeToSec(cell.out);
@@ -267,7 +279,7 @@ function workedWith(cell, s, end) {
   const t = cell.type;
   if (t === '연차' || t === '공휴일' || t === '휴일') return s.dailyTarget;
   const credit = creditSec(cell, s);
-  const inS = parseTimeToSec(cell.in);
+  const inS = effectiveStartSec(cell, s);
   let base = null;
   if (inS !== null && end !== null) {
     const lunch = overlap(inS, end, s.lunchStart, s.lunchEnd);
@@ -342,12 +354,10 @@ function estimateCheckouts(wk, s, mondayKey, now) {
 
   const remaining = Math.max(0, weeklyTarget - fixedTotal);
   const daily = ceilToMinuteSec(remaining / pending.length);
-  const defaultIn = parseTimeToSec(s.defaultIn);
   const result = {};
 
   pending.forEach(day => {
-    const start = parseTimeToSec(day.cell.in);
-    const startS = start !== null ? start : defaultIn;
+    const startS = plannedStartSec(day.cell, s);
     if (startS === null) return;
 
     const needed = Math.max(0, daily);
@@ -359,17 +369,27 @@ function estimateCheckouts(wk, s, mondayKey, now) {
   return result;
 }
 
-// 잔여(초)를 셀에 표시. 음수면(40h 초과) 빨간 '+연장'.
+function timeTone(diff) {
+  return diff < 0 ? 'overtime' : diff === 0 ? 'complete' : diff <= state.settings.dailyTarget ? 'near' : 'remaining';
+}
+// 색상과 상태 문구를 함께 표시해 잔여·달성·연장을 구분한다.
 function setRemainCell(id, diff) {
   const el = document.getElementById(id);
   if (!el) return;
-  if (diff >= 0) {
-    el.textContent = fmtDur(diff);
-    el.classList.remove('ot');
-  } else {
-    el.textContent = '+' + fmtDur(-diff);
-    el.classList.add('ot');
-  }
+  el.dataset.tone = timeTone(diff);
+  el.textContent = (diff < 0 ? '+' : '') + fmtDur(Math.abs(diff));
+  const label = document.createElement('small');
+  label.textContent = diff < 0 ? '연장' : diff === 0 ? '달성' : '남음';
+  el.appendChild(label);
+}
+function setWeeklyProgress(id, total, target) {
+  const el = document.getElementById(id);
+  const percent = Math.max(0, Math.min(100, total / target * 100));
+  el.dataset.tone = timeTone(target - total);
+  el.firstElementChild.style.width = percent + '%';
+  el.setAttribute('aria-valuenow', Math.round(percent));
+  el.setAttribute('aria-valuetext', fmtDur(total) + ' / ' + fmtDur(target));
+  el.title = '주간 누적 ' + fmtDur(total) + ' / 목표 ' + fmtDur(target);
 }
 function renderEstimatedCheckoutCells(estimates) {
   document.querySelectorAll('#rowEstOut td').forEach(td => {
@@ -436,6 +456,7 @@ function buildGrid() {
       const inp = document.createElement('input');
       inp.className = 'cellinput' + (hol ? ' muted' : '');
       inp.dataset.day = key; inp.dataset.field = field;
+      inp.setAttribute('aria-label', label + '요일 ' + (field === 'in' ? '출근 시간' : '퇴근 시간'));
       inp.placeholder = field === 'in' ? '출근' : '퇴근';
       if (hol) inp.disabled = true;
       td.appendChild(inp);
@@ -528,6 +549,15 @@ function onDefaultInChange(e) {
   recompute();
 }
 
+function updateDefaultInHints(wk) {
+  document.querySelectorAll('#rowIn .cellinput').forEach(inp => {
+    const cell = wk[inp.dataset.day];
+    const fallback = inp.disabled ? '' : normalizeTimeValue(state.settings.defaultIn);
+    inp.placeholder = inp.disabled ? '—' : fallback || '출근';
+    inp.title = fallback && !cell.in ? '기본 출근 예정 ' + fallback + ' · 퇴근 입력 시 이 시간으로 계산' : '출근 시간';
+  });
+}
+
 function recompute() {
   const s = state.settings;
   const mondayKey = shownMondayKey();
@@ -544,6 +574,7 @@ function recompute() {
   }
 
   // 근무 시간 셀
+  updateDefaultInHints(wk);
   document.querySelectorAll('#rowWork td').forEach(td => {
     const key = td.dataset.day;
     const idx = DAYS.findIndex(d => d[0] === key);
@@ -551,10 +582,13 @@ function recompute() {
     const c = ecell(wk[key], dayStr);                  // 공휴일 반영
     const isToday = isThisWeek && ti.dayIndex === idx;
     td.classList.remove('over', 'holiday');
+    td.removeAttribute('title');
     const end = isToday ? now : null;
     const w = workedSec(c, s, end);
     if (w === null) { td.textContent = ''; return; }
     td.textContent = fmtDur(w);
+    const inferred = !c.in && parseTimeToSec(c.out) !== null && c.type !== '연차' && c.type !== '휴일' && c.type !== '공휴일';
+    td.title = inferred ? '기본 출근 예정 ' + fmt24(plannedStartSec(c, s)) + ' 기준' : '';
     if (w >= targetSec(c, s) && targetSec(c, s) > 0) td.classList.add('over');
   });
 
@@ -573,6 +607,8 @@ function recompute() {
   document.getElementById('sCumPlan').textContent = fmtDur(planTotal);
   setRemainCell('sRemainPlan', wTgt - planTotal);
   document.getElementById('sTarget').textContent = fmtDur(wTgt);
+  setWeeklyProgress('progressNow', nowTotal, wTgt);
+  setWeeklyProgress('progressPlan', planTotal, wTgt);
   renderEstimatedCheckoutCells(estimates);
 }
 
@@ -700,18 +736,16 @@ function setView(mode) {
     wrap.classList.toggle('ttree-mode', mode === 'ttree');
     wrap.classList.toggle('approval-mode', mode === 'approval');
   }
-  const mb = document.getElementById('mealBtn');
-  const cb = document.getElementById('calBtn');
-  const tb = document.getElementById('ttreeBtn');
-  const ab = document.getElementById('approvalBtn');
-  if (mb) mb.textContent = mode === 'meal' ? '근무' : '식단';
-  if (cb) cb.textContent = mode === 'cal' ? '근무' : '캘린더';
-  if (tb) tb.textContent = mode === 'ttree' ? '근무' : 'TTree';
-  if (ab) ab.textContent = mode === 'approval' ? '근무' : '결재';
+  for (const [view, id] of Object.entries({ work: 'workBtn', cal: 'calBtn', meal: 'mealBtn', ttree: 'ttreeBtn', approval: 'approvalBtn' })) {
+    const btn = document.getElementById(id);
+    btn.classList.toggle('active', view === mode);
+    if (view === mode) btn.setAttribute('aria-current', 'page');
+    else btn.removeAttribute('aria-current');
+  }
 }
 
 function toggleMeal() {
-  setView(viewMode === 'meal' ? 'work' : 'meal');
+  setView('meal');
   if (viewMode === 'meal' && !mealCacheLoaded) {
     mealCacheLoaded = true;
     loadMealCache();   // 저장된 게 있으면 즉시 표시 (네트워크 X)
@@ -1114,7 +1148,7 @@ function enterCal() {
 }
 
 function toggleCal() {
-  setView(viewMode === 'cal' ? 'work' : 'cal');
+  setView('cal');
   if (viewMode === 'cal') enterCal();
 }
 
@@ -1143,7 +1177,7 @@ function setTtreeMessage(msg, cls) {
 }
 function setTtreeBusy(busy) {
   ttreeBusy = busy;
-  ['ttreeLogin', 'ttreeReload', 'ttreeLookupReload', 'ttreePreview', 'ttreeSubmit'].forEach(id => {
+  ['ttreeLogin', 'ttreeReload', 'ttreeLookupReload', 'ttreePreview', 'ttreeSubmit', 'ttreeKind'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = busy;
   });
@@ -1151,13 +1185,13 @@ function setTtreeBusy(busy) {
 function setTtreeMode(on) {
   setView(on ? 'ttree' : 'work');
 }
-function toggleTtree() {
+async function toggleTtree() {
   const opening = viewMode !== 'ttree';
-  setTtreeMode(opening);
+  setTtreeMode(true);
   if (opening) {
     setTtreeDefaults();
-    if (!ttreeLookupsLoaded) loadTtreeLookups();
-    loadTtreeStatus();
+    if (!ttreeLookupsLoaded) await loadTtreeLookups();
+    await loadTtreeStatus();
   }
 }
 function todayYmdInput() { return ymd(new Date()); }
@@ -1183,6 +1217,11 @@ function setTtreeDefaults() {
   if (bsrpStart && !bsrpStart.value) bsrpStart.value = '09:00';
   if (bsrpEnd && !bsrpEnd.value) bsrpEnd.value = '18:00';
   applyTtreeRangeTimes();
+  const monday = new Date();
+  monday.setDate(monday.getDate() - (monday.getDay() + 6) % 7);
+  const sunday = new Date(monday); sunday.setDate(sunday.getDate() + 6);
+  document.getElementById('ttreeOvertimeStart').value = ymd(monday);
+  document.getElementById('ttreeOvertimeEnd').value = ymd(sunday);
 }
 function fillSelect(sel, items, valueKey, textKey, emptyText) {
   if (!sel) return;
@@ -1213,6 +1252,7 @@ function populateTtreeLookups(res) {
   fillSelect(approvalSel, res.approvals || [], 'id', 'name', '결재선 선택');
   renderTtreeApprovalDetail();
   setTtreeDefaults();
+  applyTtreeKind();
 }
 async function loadTtreeLookups() {
   if (ttreeBusy) return;
@@ -1262,6 +1302,7 @@ function statusClass(code) {
   return 'pending';
 }
 function ttreePeriod(item) {
+  if (item.kind === 'overtime') return item.registeredDate ? '신청일 ' + item.registeredDate : '신청일 미확인';
   const d = item.startDate === item.endDate ? item.startDate : (item.startDate + ' ~ ' + item.endDate);
   const t = item.startTime || item.endTime ? ' ' + [item.startTime, item.endTime].filter(Boolean).join('~') : '';
   return (d || '-') + t;
@@ -1285,7 +1326,7 @@ function renderTtreeList(id, items, emptyText) {
     const title = document.createElement('strong');
     title.textContent = item.title || '-';
     const sub = document.createElement('span');
-    const extras = [ttreePeriod(item), item.dayCount ? item.dayCount + '일' : '', item.customer || '', item.location || '', item.reason || ''].filter(Boolean);
+    const extras = [ttreePeriod(item), item.dayCount ? item.dayCount + '일' : '', item.customer || '', item.location || '', item.reason || '', item.rejectionReason ? '반려 사유: ' + item.rejectionReason : ''].filter(Boolean);
     sub.textContent = extras.join(' · ');
     main.appendChild(title); main.appendChild(sub);
     const badge = document.createElement('span');
@@ -1307,9 +1348,10 @@ async function loadTtreeStatus() {
   if (res && res.status === 'ok') {
     renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
     renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
+    renderTtreeList('ttreeOvertimeList', res.overtime || [], res.warnings?.length ? '연장근무 현황 조회 실패' : '조회된 연장근무 신청이 없습니다.');
     const range = document.getElementById('ttreeStatusRange');
     if (range && res.range) range.textContent = res.range.begin + ' ~ ' + res.range.end;
-    setTtreeMessage('TTree 신청 현황 조회 완료', 'ok');
+    setTtreeMessage(res.warnings?.length ? res.warnings.join(' ') : 'TTree 신청 현황 조회 완료', res.warnings?.length ? 'err' : 'ok');
   } else if (res && res.status === 'login_required') {
     setTtreeMessage((res && res.message) || 'TTree 로그인이 필요합니다. 로그인 버튼을 눌러 주세요.', 'err');
   } else {
@@ -1341,7 +1383,8 @@ function renderTtreeApprovalDetail() {
   const box = document.getElementById('ttreeApprovalDetail');
   const id = document.getElementById('ttreeApproval')?.value || '';
   if (!box) return;
-  const line = ((ttreeLookups && ttreeLookups.approvals) || []).find(x => x.id === id);
+  const lines = document.getElementById('ttreeKind')?.value === 'overtime' ? ttreeLookups?.overtime?.approvals : ttreeLookups?.approvals;
+  const line = (lines || []).find(x => x.id === id);
   if (!line || !line.details || !line.details.length) {
     box.textContent = '';
     return;
@@ -1355,7 +1398,25 @@ function applyTtreeKind() {
   const title = document.getElementById('ttreeTitle');
   if (leave) leave.hidden = kind !== 'leave';
   if (bsrp) bsrp.hidden = kind !== 'bsrp';
-  if (title) title.textContent = kind === 'leave' ? '휴가 신청' : '출장 신청';
+  document.getElementById('ttreeOvertimeForm').hidden = kind !== 'overtime';
+  if (title) title.textContent = { leave: '휴가 신청', bsrp: '출장 신청', overtime: '연장근무 신청' }[kind];
+  const approval = document.getElementById('ttreeApproval');
+  const previous = approval.value;
+  const policy = ttreeLookups?.overtime;
+  fillSelect(approval, (kind === 'overtime' ? policy?.approvals : ttreeLookups?.approvals) || [], 'id', 'name', '결재선 선택');
+  approval.disabled = kind === 'overtime' && !!policy?.fixedApprovalId;
+  if ([...approval.options].some(x => x.value === previous)) approval.value = previous;
+  if (kind === 'overtime') {
+    if (policy?.fixedApprovalId) approval.value = policy.fixedApprovalId;
+    if (policy?.startDate) document.getElementById('ttreeOvertimeStart').value = policy.startDate;
+    if (policy?.endDate) document.getElementById('ttreeOvertimeEnd').value = policy.endDate;
+    document.getElementById('ttreeOvertimeNote').textContent = policy?.enabled ? '이번 주 월~일 · 12시간 고정' + (policy.fixedApprovalId ? ' · 회사 지정 결재선' : '') : (policy?.message || '코드 새로고침으로 연장근무 설정을 불러와 주세요.');
+    document.getElementById('ttreeOvertimeRestartRow').hidden = !policy?.canRestart;
+    if (!policy?.canRestart) document.getElementById('ttreeOvertimeRestart').checked = false;
+  } else if (kind === 'leave') fixTtreeApprovalByLeaveType();
+  renderTtreeApprovalDetail();
+  document.getElementById('ttreeConfirm').checked = false;
+  document.getElementById('ttreePreviewBox').textContent = '';
   applyTtreeBsrpRange();
 }
 function closeTtreePanel() {
@@ -1424,6 +1485,13 @@ function collectTtreeBsrpDraft() {
   };
 }
 function currentTtreeDraft() {
+  if (document.getElementById('ttreeKind')?.value === 'overtime') return {
+    startDate: document.getElementById('ttreeOvertimeStart').value,
+    endDate: document.getElementById('ttreeOvertimeEnd').value,
+    reason: document.getElementById('ttreeOvertimeReason').value,
+    sanctnId: document.getElementById('ttreeApproval').value,
+    restartWork: document.getElementById('ttreeOvertimeRestart').checked,
+  };
   return (document.getElementById('ttreeKind')?.value || 'leave') === 'leave' ? collectTtreeLeaveDraft() : collectTtreeBsrpDraft();
 }
 function showTtreePreview(res) {
@@ -1433,43 +1501,53 @@ function showTtreePreview(res) {
     box.textContent = '오류: ' + ((res && res.message) || '알 수 없음');
     return;
   }
-  box.textContent = res.endpoint + '\n' + res.contentType + '\n\n' + JSON.stringify(res.payload, null, 2);
+  box.textContent = res.summary || (res.endpoint + '\n' + res.contentType + '\n\n' + JSON.stringify(res.payload, null, 2));
 }
 async function previewTtreeRequest() {
+  if (ttreeBusy) return;
   const kind = document.getElementById('ttreeKind')?.value || 'leave';
   const draft = currentTtreeDraft();
   let res = null;
   try {
     if (kind === 'leave') res = apiReady('ttree_preview_leave') ? await pywebview.api.ttree_preview_leave(draft) : { status: 'error', message: '앱 브리지 없음' };
+    else if (kind === 'overtime') res = apiReady('ttree_preview_overtime') ? await pywebview.api.ttree_preview_overtime(draft) : { status: 'error', message: '앱 브리지 없음' };
     else res = apiReady('ttree_preview_bsrp') ? await pywebview.api.ttree_preview_bsrp(draft) : { status: 'error', message: '앱 브리지 없음' };
   } catch (e) { res = { status: 'error', message: String(e) }; }
+  if (kind === 'overtime' && res?.summary) res.summary += '\n결재선: ' + document.getElementById('ttreeApproval').selectedOptions[0]?.textContent;
   showTtreePreview(res);
   setTtreeMessage(res && res.status === 'ok' ? '미리보기 생성 완료' : '미리보기 실패: ' + ((res && res.message) || '알 수 없음'), res && res.status === 'ok' ? 'ok' : 'err');
 }
 async function submitTtreeRequest() {
+  if (ttreeBusy) return;
   if (!document.getElementById('ttreeConfirm')?.checked) {
     setTtreeMessage('실제 신청 전 확인 체크박스를 선택해 주세요.', 'err');
     return;
   }
   const kind = document.getElementById('ttreeKind')?.value || 'leave';
-  const label = kind === 'leave' ? '휴가' : '출장';
-  if (!window.confirm('TTree에 실제 ' + label + ' 신청을 등록할까요?')) return;
+  const label = { leave: '휴가', bsrp: '출장', overtime: '이번 주 12시간 연장근무' }[kind];
+  if (kind === 'overtime' && !ttreeLookups?.overtime?.enabled) {
+    setTtreeMessage(ttreeLookups?.overtime?.message || '코드 새로고침으로 연장근무 설정을 확인해 주세요.', 'err');
+    return;
+  }
+  const draft = currentTtreeDraft();
+  const detail = kind === 'overtime' ? '\n' + draft.startDate + ' ~ ' + draft.endDate + '\n사유: ' + draft.reason + '\n결재선: ' + document.getElementById('ttreeApproval').selectedOptions[0]?.textContent + (draft.restartWork ? '\n신청과 함께 근무를 재시작합니다.' : '') : '';
+  if (!window.confirm('TTree에 실제 ' + label + ' 신청을 등록할까요?' + detail)) return;
   setTtreeBusy(true);
   setTtreeMessage('TTree에 실제 ' + label + ' 신청 전송 중...');
   let res = null;
-  const draft = currentTtreeDraft();
   try {
     if (kind === 'leave') res = apiReady('ttree_submit_leave') ? await pywebview.api.ttree_submit_leave(draft) : { status: 'error', message: '앱 브리지 없음' };
+    else if (kind === 'overtime') res = apiReady('ttree_submit_overtime') ? await pywebview.api.ttree_submit_overtime(draft) : { status: 'error', message: '앱 브리지 없음' };
     else res = apiReady('ttree_submit_bsrp') ? await pywebview.api.ttree_submit_bsrp(draft) : { status: 'error', message: '앱 브리지 없음' };
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setTtreeBusy(false);
   if (res && res.status === 'ok') {
     document.getElementById('ttreeConfirm').checked = false;
-    showTtreePreview({ status: 'ok', endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: kind === 'leave' ? 'application/json' : 'application/x-www-form-urlencoded', payload: res.payload || {} });
+    showTtreePreview({ status: 'ok', summary: res.summary, endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: kind === 'leave' ? 'application/json' : 'application/x-www-form-urlencoded', payload: res.payload || {} });
     setTtreeMessage((res.message || label + ' 신청 완료') + ' · 현황을 다시 조회합니다.', 'ok');
     loadTtreeStatus();
   } else if (res && res.status === 'duplicate') {
-    showTtreePreview({ status: 'ok', endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: '', payload: res.payload || {} });
+    showTtreePreview({ status: 'ok', summary: res.message, endpoint: kind === 'leave' ? 'POST /vcatn' : 'POST /work/bsrp', contentType: '', payload: res.payload || {} });
     setTtreeMessage(res.message || '중복 신청으로 전송하지 않았습니다.', 'err');
   } else {
     setTtreeMessage(label + ' 신청 실패: ' + ((res && res.message) || '알 수 없음'), 'err');
@@ -1528,7 +1606,7 @@ function setApprovalMode(on) {
 
 function toggleApproval() {
   const opening = viewMode !== 'approval';
-  setApprovalMode(opening);
+  setApprovalMode(true);
   if (opening && !approvalInit) { approvalInit = true; initApprovalPanel(); }
   if (opening) refreshApprovalSheet();
 }
@@ -1626,6 +1704,7 @@ async function init() {
   document.getElementById('todayBtn').addEventListener('click', () => { weekOffset = 0; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
+  document.getElementById('workBtn').addEventListener('click', () => setView('work'));
   document.getElementById('mealBtn').addEventListener('click', toggleMeal);
   document.getElementById('mealReload').addEventListener('click', reloadMeal);
   document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);

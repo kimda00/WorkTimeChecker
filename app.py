@@ -57,13 +57,23 @@ if _PY.lower().endswith("pythonw.exe"):
 _CREATE_NO_WINDOW = 0x08000000
 
 
+def _worker_env(env_extra=None):
+    """작업 프로세스는 새 번들을 사용해 장기 실행 중 임시파일 정리에 대비한다."""
+    env = dict(os.environ)
+    if env_extra:
+        env.update({k: str(v) for k, v in env_extra.items()})
+    if getattr(sys, "frozen", False):
+        # onefile 자식이 오래된 _MEIPASS를 재사용하면, OS 임시파일 정리 후
+        # greenlet 확장 모듈/Playwright 드라이버 등을 불러올 수 없다.
+        # 독립 인스턴스로 풀면 메인 앱 종료 후에도 결재 창을 유지할 수 있다.
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def _run_pw(cmd, script, flag, timeout, env_extra=None):
     """Playwright 작업(EHR/식단/캘린더)을 콘솔 stdio 있는 별도 프로세스로 실행하고
     JSON 결과를 받는다. env_extra 로 추가 파라미터(예: 캘린더 월/선택)를 넘긴다."""
-    env = None
-    if env_extra:
-        env = dict(os.environ)
-        env.update({k: str(v) for k, v in env_extra.items()})
+    env = _worker_env(env_extra)
     # exe(frozen): 자기 자신을 재실행해 결과를 임시파일로 받음 (번들엔 별도 .py 없음)
     if getattr(sys, "frozen", False):
         import tempfile
@@ -127,6 +137,7 @@ def _run_ttree(cmd, timeout, payload=None):
         "lookupsjson": "--ttree-lookups",
         "submitleavejson": "--ttree-submit-leave",
         "submitbsrpjson": "--ttree-submit-bsrp",
+        "submitovertimejson": "--ttree-submit-overtime",
     }
     flag = flag_map.get(cmd)
     if getattr(sys, "frozen", False):
@@ -147,6 +158,7 @@ def _run_ttree(cmd, timeout, payload=None):
                 capture_output=True,
                 creationflags=_CREATE_NO_WINDOW,
                 timeout=timeout,
+                env=_worker_env(),
             )
             with open(tf, "r", encoding="utf-8") as f:
                 return json.load(f)
@@ -165,8 +177,9 @@ def _run_ttree(cmd, timeout, payload=None):
         proc = subprocess.run(
             [_PY, TTREE_PY, cmd],
             cwd=BASE,
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
             input=json.dumps(payload, ensure_ascii=False) if payload is not None else None,
-            stdin=subprocess.PIPE if payload is not None else subprocess.DEVNULL,
+            **({} if payload is not None else {"stdin": subprocess.DEVNULL}),
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -204,7 +217,8 @@ def _run_approval(cmd, timeout, payload=None):
                     json.dump(payload, f, ensure_ascii=False)
                 args.append(inf)
             subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
-                           creationflags=_CREATE_NO_WINDOW, timeout=timeout)
+                           creationflags=_CREATE_NO_WINDOW, timeout=timeout,
+                           env=_worker_env())
             with open(tf, "r", encoding="utf-8") as f:
                 return json.load(f)
         except subprocess.TimeoutExpired:
@@ -262,6 +276,7 @@ def _run_approval_prefill_background(payload=None):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=_CREATE_NO_WINDOW,
+                env=_worker_env(),
             )
         else:
             proc = subprocess.Popen(
@@ -373,6 +388,13 @@ class Api:
 
     def ttree_submit_bsrp(self, data):
         return _run_ttree("submitbsrpjson", timeout=150, payload=data or {})
+
+    def ttree_preview_overtime(self, data):
+        import ttree
+        return ttree.preview_overtime(data or {})
+
+    def ttree_submit_overtime(self, data):
+        return _run_ttree("submitovertimejson", timeout=150, payload=data or {})
 
     def load_meal(self):
         """네트워크 없이 저장된 최신 식단 이미지를 반환(앱 진입 시 즉시 표시)."""
@@ -520,15 +542,53 @@ def run_tray():
     icon.run()
 
 
-# 단일 인스턴스: 루프백 포트를 잠금 겸 "창 표시" 신호 채널로 쓴다.
-# 닫으면 트레이로 숨는 앱이라, 두 번째 실행이 새 프로세스를 띄우는 대신
-# 이미 떠 있는 창을 다시 보여주고 즉시 끝낸다(백그라운드 누적 방지).
+# 단일 인스턴스: Windows에서는 named mutex를 사용한다. 고정 TCP 포트는
+# Windows 제외 포트 범위에 들어가면 WSAEACCES가 나서 앱이 조용히 종료될 수 있다.
+# 비-Windows 환경에서만 기존 루프백 소켓 방식을 fallback으로 사용한다.
 _LOCK_PORT = 49517
+_MUTEX_NAME = "Local\\WorkTimeChecker.SingleInstance"
+
+
+def _show_existing_native_window():
+    """숨겨진 기존 Windows 창을 찾아 복원한다."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.FindWindowW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR)
+        user32.FindWindowW.restype = wintypes.HWND
+        user32.ShowWindow.argtypes = (wintypes.HWND, ctypes.c_int)
+        user32.SetForegroundWindow.argtypes = (wintypes.HWND,)
+        hwnd = user32.FindWindowW(None, "근태")
+        if not hwnd:
+            return False
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(hwnd)
+        return True
+    except Exception:
+        return False
 
 
 def acquire_single_instance():
-    """유일한 인스턴스면 listen 상태의 잠금 소켓을, 이미 실행 중이면
-    그 인스턴스에 '창 표시'를 신호한 뒤 None 을 돌려준다."""
+    """유일한 인스턴스면 잠금 객체를, 이미 실행 중이면 None을 반환한다."""
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CreateMutexW.argtypes = (wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR)
+        kernel32.CreateMutexW.restype = wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+            kernel32.CloseHandle(handle)
+            _show_existing_native_window()
+            return None
+        return handle
+
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind(("127.0.0.1", _LOCK_PORT))
@@ -560,6 +620,27 @@ def serve_single_instance(lock):
         show_window()
 
 
+def release_single_instance(lock):
+    if lock is None:
+        return
+    if isinstance(lock, socket.socket):
+        try:
+            lock.close()
+        except OSError:
+            pass
+        return
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            kernel32.CloseHandle(lock)
+        except Exception:
+            pass
+
+
 def main():
     global window
     lock = acquire_single_instance()
@@ -575,15 +656,19 @@ def main():
         min_size=(720, 450),
     )
     window.events.closing += on_closing
-    threading.Thread(target=serve_single_instance, args=(lock,), daemon=True).start()
+    if isinstance(lock, socket.socket):
+        threading.Thread(target=serve_single_instance, args=(lock,), daemon=True).start()
     if HAS_TRAY:
         threading.Thread(target=run_tray, daemon=True).start()
-    webview.start()
+    try:
+        webview.start()
+    finally:
+        release_single_instance(lock)
 
 
 def _maybe_run_ehr_mode():
     """exe(frozen)에서 _run_pw 가 자기 자신을 재실행한 경우: GUI 대신 작업 수행 후 종료."""
-    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--ttree-login", "--ttree-status", "--ttree-lookups", "--ttree-submit-leave", "--ttree-submit-bsrp", "--approval-payday", "--approval-prefill", "--approval-prefill-bg"):
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--ttree-login", "--ttree-status", "--ttree-lookups", "--ttree-submit-leave", "--ttree-submit-bsrp", "--ttree-submit-overtime", "--approval-payday", "--approval-prefill", "--approval-prefill-bg"):
         if sys.argv[1] == "--approval-prefill-bg":
             import approval
             payload = {}
@@ -631,6 +716,8 @@ def _maybe_run_ehr_mode():
                 res = ttree.fetch_lookups()
             elif sys.argv[1] == "--ttree-submit-leave":
                 res = ttree.submit_leave(payload)
+            elif sys.argv[1] == "--ttree-submit-overtime":
+                res = ttree.submit_overtime(payload)
             else:
                 res = ttree.submit_bsrp(payload)
         else:

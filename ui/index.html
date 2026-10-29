@@ -53,8 +53,9 @@
     </div>
 
     <div class="settingbar">
-      <span class="settinglabel">기본 출근 예정</span>
-      <input id="defaultIn" class="settinginput" placeholder="09:00" />
+      <span class="settinghint">회색 출근 + 퇴근 입력으로 계산</span>
+      <label for="defaultIn" class="settinglabel">기본 출근 예정</label>
+      <input id="defaultIn" class="settinginput" placeholder="09:00" aria-label="기본 출근 예정 시간" />
     </div>
 
     <table id="grid">
@@ -87,6 +88,7 @@
       <div id="sRemainNow" class="cell val"></div>
       <div class="cell label">주간 누적</div>
       <div id="sCumNow" class="cell val"></div>
+      <div id="progressNow" class="summary-progress" role="progressbar" aria-label="현재 주간 근무 달성률" aria-valuemin="0" aria-valuemax="100"><span></span></div>
     </div>
 
     <div class="sumcap">예정 포함 — 입력한 퇴근시간 기준 · 주 40h</div>
@@ -97,6 +99,7 @@
       <div id="sRemainPlan" class="cell val"></div>
       <div class="cell label">주 목표</div>
       <div id="sTarget" class="cell val"></div>
+      <div id="progressPlan" class="summary-progress" role="progressbar" aria-label="예정 포함 주간 근무 달성률" aria-valuemin="0" aria-valuemax="100"><span></span></div>
     </div>
 
     <div id="statusLine" class="status"></div>
@@ -166,6 +169,7 @@
               <select id="ttreeKind" class="ttree-select">
                 <option value="leave">휴가</option>
                 <option value="bsrp">출장/교육</option>
+                <option value="overtime">연장근무 · 이번 주 12시간</option>
               </select>
             </div>
 
@@ -208,6 +212,15 @@
               <label>사유<textarea id="ttreeBsrpReason" class="ttree-textarea" rows="3" placeholder="사유를 입력해주세요."></textarea></label>
             </div>
 
+            <div id="ttreeOvertimeForm" class="ttree-form" hidden>
+              <div class="ttree-overtime-note" id="ttreeOvertimeNote">TTree 양식에 따라 이번 주 12시간을 신청합니다.</div>
+              <label>시작일<input id="ttreeOvertimeStart" class="ttree-input" type="date" readonly /></label>
+              <label>종료일<input id="ttreeOvertimeEnd" class="ttree-input" type="date" readonly /></label>
+              <label>연장 시간<input class="ttree-input" value="12시간 (고정)" readonly /></label>
+              <label>신청 사유<textarea id="ttreeOvertimeReason" class="ttree-textarea" rows="3" placeholder="이번 주 연장근무 사유를 입력해 주세요."></textarea></label>
+              <label id="ttreeOvertimeRestartRow" hidden>근무 재시작<span><input id="ttreeOvertimeRestart" type="checkbox" /> 신청과 함께 근무 재시작</span></label>
+            </div>
+
             <label class="ttree-confirm"><input id="ttreeConfirm" type="checkbox" /> 실제 TTree에 신청합니다.</label>
             <pre id="ttreePreviewBox" class="ttree-preview"></pre>
           </div>
@@ -233,6 +246,8 @@
           <div class="ttree-list-wrap">
             <div id="ttreeBalanceSummary" class="ttree-balance-summary"></div>
             <div class="ttree-status-range" id="ttreeStatusRange"></div>
+            <h4>연장근무</h4>
+            <div id="ttreeOvertimeList" class="ttree-list"></div>
             <h4>휴가</h4>
             <div id="ttreeLeaveList" class="ttree-list"></div>
             <h4>출장/교육</h4>

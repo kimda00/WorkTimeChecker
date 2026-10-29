@@ -321,3 +321,15 @@ TTree가 업데이트되어 연동이 깨지면 이 순서로 다시 본다.
 - TTree가 로그인 폼에서 서버 인증 실패를 반환하면 WorkTimeChecker가 세션을 저장할 수 없다.
 - 이 경우 TTree 웹 로그인에 쓰는 정확한 로그인 ID 형식과 비밀번호를 다시 확인해야 한다.
 - CDP 방식은 다시 필요해질 때를 대비한 조사 기록으로만 남긴다.
+
+
+## 2026-10-29 연장근무 추가 검증
+
+로그인된 `/main`의 `frmWorkExtn`, `workOvertimePopup` 및 `/work/view/work-extn-sanctn-view`의 스크립트를 읽기 전용으로 확인했다. 실제 신청 POST는 개발 중 실행하지 않았다.
+
+- 신청: `POST /work/workextn` (JSON). `workExtnTime`은 `12.000`, `overtimeWorkBgnDe`/`overtimeWorkEndDe`는 이번 주 월~일의 YYYYMMDD, `workExtnCn`은 사유, `sanctnId`는 결재선, `workTimeId`는 전송 직전 `/main`에서 읽은 현재 값이다. `workRestartYn=Y`는 사용자가 근무 재시작을 선택했을 때만 포함한다.
+- 결재선: `/users/sanctn` 조회. `_sanctnFixUseYn=Y`이면 원본 컴포넌트처럼 `searchSanctnSe=VCATN`을 사용한다. 연장근무 컴포넌트의 `fixApprovalLineName`을 읽어 원본과 동일한 결재선을 고정한다. 양식/결재선 파싱에 실패하면 신청을 막고 재확인을 안내한다.
+- 전송 전 제한: 원본 등록 버튼은 `/worktime/usage/my`의 `max(0, totalRealWorkMnt - weeklyWorkPrdtmMnt) > weeklyExtnWorkPrdtmMnt`일 때 차단한다. 주석 처리된 과거 검증 로직은 적용하지 않는다.
+- 현황: `GET /work/sanctn/my/extn?searchBgnDe=YYYY-MM-DD&searchEndDe=YYYY-MM-DD`. 목록은 `myExtnSanctnReqInfoList`, 빈 결과는 HTTP 204이다. `workExtnConfmCd`는 000 대기/800 반려/900 승인, `regDt`는 등록 시각(YYYYMMDDHHmmss), `workExtnRtyy`는 반려 사유다. 실제 응답에 근무 시작/종료일이 없으므로 UI에는 신청일을 표시한다.
+- 같은 주의 기존 대기/승인 신청은 중복 전송하지 않는다. 조회 실패나 응답 형식 변경 시에도 전송하지 않는다. 반려/취소된 신청은 재신청할 수 있다.
+- 자동 테스트는 세션/API 모의 응답으로만 신청 경로를 검증한다. 운영 환경에서는 설정/현황 조회만 확인한다.

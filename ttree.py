@@ -483,8 +483,15 @@ def fetch_status(days_before=90, days_after=90):
         bsrp_json = _json_response(bsrp_resp) if bsrp_resp.ok else {}
         leave = [_normalize_leave(x) for x in (leave_json.get("myVcatnSanctnReqInfoList") or [])]
         bsrp = [_normalize_bsrp(x) for x in (bsrp_json.get("myBsrpSanctnReqInfoList") or [])]
+        warnings = []
+        try:
+            overtime = [_normalize_overtime(x) for x in _overtime_rows(ctx, begin, end)]
+        except Exception:
+            overtime = []
+            warnings.append("연장근무 현황을 불러오지 못했습니다. 다시 조회해 주세요.")
         return {"status": "ok", "user": user, "range": {"begin": begin, "end": end},
-                "leave": leave, "businessTrip": bsrp, "leaveBalance": _leave_balance(ctx)}
+                "leave": leave, "businessTrip": bsrp, "overtime": overtime, "warnings": warnings,
+                "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 
@@ -586,8 +593,13 @@ def fetch_lookups():
         if pr.ok:
             preset = _json_response(pr).get("preset") or _json_response(pr)
         approvals = _approval_lines(ctx, user["userId"])
+        try:
+            overtime = _overtime_context(ctx, user)
+            overtime.pop("workTimeId", None)
+        except Exception as e:
+            overtime = {"enabled": False, "message": str(e), "approvals": []}
         return {"status": "ok", "user": user, "leaveClasses": classes, "approvals": approvals,
-                "preset": preset, "leaveBalance": _leave_balance(ctx)}
+                "preset": preset, "overtime": overtime, "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 
@@ -775,6 +787,146 @@ def submit_bsrp(draft):
         _close(p, browser, ctx)
 
 
+def _overtime_week(day=None):
+    day = day or _today()
+    monday = day - _dt.timedelta(days=day.weekday())
+    return monday.isoformat(), (monday + _dt.timedelta(days=6)).isoformat()
+
+
+def _overtime_rows(ctx, begin, end):
+    r = _get(ctx, "/work/sanctn/my/extn", {"searchBgnDe": begin, "searchEndDe": end})
+    if r.status == 204:
+        return []
+    body = _json_response(r)
+    rows = body.get("myExtnSanctnReqInfoList") if isinstance(body, dict) else None
+    if not r.ok or not isinstance(rows, list):
+        raise ValueError("연장근무 현황을 확인할 수 없습니다. 새로고침 후 다시 시도해 주세요.")
+    return rows
+
+
+def _normalize_overtime(item):
+    code = "999" if item.get("delYn") == "Y" else str(item.get("workExtnConfmCd") or "")
+    registered = re.sub(r"\D", "", str(item.get("regDt") or ""))
+    hours = str(item.get("workExtnTime") or "0")
+    if "." in hours:
+        hours = hours.rstrip("0").rstrip(".")
+    return {
+        "kind": "overtime", "id": item.get("confmId") or "",
+        "title": "연장근무 " + hours + "시간",
+        "registeredDate": _iso_date(registered[:8]),
+        "statusCode": code, "statusName": _status_name(code),
+        "reason": item.get("workExtnCn") or "",
+        "rejectionReason": item.get("workExtnRtyy") or "",
+    }
+
+
+def _overtime_context(ctx, user):
+    r = _get(ctx, "/main")
+    source = r.text()
+    if not r.ok or _find_js_var(source, "_sessUserId") != user["userId"]:
+        raise ValueError("TTree 로그인 정보를 다시 확인해 주세요.")
+    form = re.search(r'<form\b[^>]*id="frmWorkExtn"[^>]*>(.*?)</form>', source, re.S)
+    if not form or not re.search(r'<option\b[^>]*value="12\.000"', form[1]):
+        raise ValueError("TTree의 12시간 연장근무 양식이 변경되었습니다. TTree에서 확인해 주세요.")
+    if _find_js_var(source, "_workExtnBtnYn") != "Y":
+        raise ValueError("현재 TTree에서 연장근무 신청을 사용할 수 없습니다.")
+    marker = "window.approvalLine['approvalLine_extnMySanctnInfoList'].fixApprovalLine ="
+    section = source.partition(marker)[2].split(".fixApprovalLineByLineName", 1)[0]
+    fixed = re.search(r"const fixApprovalLineName\s*=\s*\('([^']*)'\s*===\s*'null'\)", section)
+    if not fixed:
+        raise ValueError("연장근무 결재선 설정을 확인할 수 없습니다. TTree에서 확인해 주세요.")
+    fixed_name = fixed[1] if fixed[1] != "null" else "자가승인"
+    lines = _approval_lines(ctx, user["userId"], "VCATN" if _find_js_var(source, "_sanctnFixUseYn") == "Y" else None)
+    fixed_line = next((line for line in lines if line["name"] == fixed_name), None)
+    # The official form uses moment().isoWeekday(1/7), i.e. local calendar dates.
+    begin, end = _overtime_week()
+    return {"enabled": True, "startDate": begin, "endDate": end, "hours": 12,
+            "workTimeId": _find_js_var(source, "_workTimeId"),
+            "canRestart": _find_js_var(source, "_workStCd") != "000",
+            "approvals": lines, "fixedApprovalId": fixed_line["id"] if fixed_line else ""}
+
+
+def build_overtime_payload(draft, context=None):
+    draft = draft or {}
+    begin, end = _overtime_week()
+    if context:
+        begin, end = context["startDate"], context["endDate"]
+    if (draft.get("startDate"), draft.get("endDate")) != (begin, end):
+        raise ValueError("이번 주 월요일~일요일만 신청할 수 있습니다. 코드 새로고침 후 기간을 확인해 주세요.")
+    reason = str(draft.get("reason") or "").strip()
+    approval = str(draft.get("sanctnId") or "")
+    if not reason:
+        raise ValueError("연장근무 신청 사유를 입력해 주세요.")
+    if not approval:
+        raise ValueError("결재선을 선택해 주세요.")
+    if context:
+        if approval not in [line["id"] for line in context["approvals"]]:
+            raise ValueError("선택한 결재선이 변경되었습니다. 코드 새로고침 후 확인해 주세요.")
+        if context["fixedApprovalId"] and approval != context["fixedApprovalId"]:
+            raise ValueError("TTree에서 지정한 연장근무 결재선을 사용해 주세요.")
+        if draft.get("restartWork") and not context["canRestart"]:
+            raise ValueError("현재 근무 중입니다. 근무 재시작을 해제해 주세요.")
+    payload = {"overtimeWorkBgnDe": _compact_date(begin), "overtimeWorkEndDe": _compact_date(end),
+               "workExtnTime": "12.000", "workExtnCn": reason, "sanctnId": approval,
+               "extnMySanctnInfoList": approval}
+    if context:
+        payload["workTimeId"] = context["workTimeId"]
+    if draft.get("restartWork"):
+        payload["workRestartYn"] = "Y"
+    return payload
+
+
+def preview_overtime(draft):
+    try:
+        payload = build_overtime_payload(draft)
+        return {"status": "ok", "summary": "이번 주 연장근무 12시간\n" + draft["startDate"] + " ~ " + draft["endDate"] + "\n사유: " + payload["workExtnCn"] + "\n근무 재시작: " + ("신청과 함께 재시작" if draft.get("restartWork") else "안 함")}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def submit_overtime(draft):
+    # Validate before opening a session; preview never performs network writes.
+    preview = preview_overtime(draft)
+    if preview["status"] != "ok":
+        return preview
+    p, browser, ctx, user, err = _session_context()
+    if err:
+        return err
+    sent = False
+    try:
+        context = _overtime_context(ctx, user)
+        payload = build_overtime_payload(draft, context)
+        rows = _overtime_rows(ctx, context["startDate"], context["endDate"])
+        for row in rows:
+            normalized = _normalize_overtime(row)
+            if normalized["statusCode"] not in ("800", "999"):
+                return {"status": "duplicate", "message": "이번 주에 이미 등록된 연장근무 신청이 있습니다. 신청 현황을 확인해 주세요."}
+        r = _get(ctx, "/worktime/usage/my", {"baseDate": _compact_date(_today().isoformat())})
+        usage = _json_response(r)
+        keys = ("weeklyWorkPrdtmMnt", "totalRealWorkMnt", "weeklyExtnWorkPrdtmMnt")
+        if not r.ok or any(usage.get(k) is None for k in keys):
+            raise ValueError("주간 근무시간을 확인하지 못했습니다. 다시 조회해 주세요.")
+        from decimal import Decimal
+        regular, actual, allowed = (Decimal(str(usage[k])) for k in keys)
+        if not all(v.is_finite() and v >= 0 for v in (regular, actual, allowed)):
+            raise ValueError("주간 근무시간 응답을 확인할 수 없습니다.")
+        if max(Decimal(0), actual - regular) > allowed:
+            raise ValueError("TTree에 설정된 주당 허용 연장근로시간을 초과했습니다.")
+        sent = True
+        r = _post_json(ctx, "/work/workextn", payload)
+        body = _json_response(r)
+        if not r.ok or body.get("errorSe"):
+            return {"status": "error", "message": body.get("resultMsg") or "연장근무 신청 실패. 현황을 확인해 주세요."}
+        if not body.get("resultMsg"):
+            raise ValueError("신청 결과를 확인할 수 없습니다.")
+        return {"status": "ok", "message": "이번 주 12시간 연장근무 신청 완료", "summary": preview["summary"]}
+    except Exception as e:
+        message = "전송 결과가 불확실합니다. 재신청 전에 현황을 새로고침해 주세요." if sent else str(e)
+        return {"status": "error", "message": message}
+    finally:
+        _close(p, browser, ctx)
+
+
 def _read_stdin_json():
     try:
         raw = sys.stdin.read()
@@ -803,10 +955,14 @@ def main():
                 payload = json.load(f)
         except Exception:
             payload = {}
-    elif cmd in ("submitleavejson", "submitbsrpjson", "previewleavejson", "previewbsrpjson"):
+    elif cmd in ("submitleavejson", "submitbsrpjson", "previewleavejson", "previewbsrpjson", "submitovertimejson", "previewovertimejson"):
         payload = _read_stdin_json()
 
-    if cmd == "--ttree-login":
+    if cmd in ("--ttree-submit-overtime", "submitovertimejson"):
+        res = submit_overtime(payload)
+    elif cmd == "previewovertimejson":
+        res = preview_overtime(payload)
+    elif cmd == "--ttree-login":
         res = login()
     elif cmd == "--ttree-status":
         res = fetch_status()

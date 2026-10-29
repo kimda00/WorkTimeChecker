@@ -15,6 +15,16 @@
   --red: #ff6b5e;         /* 주간 초과(연장) */
   --today: rgba(63, 224, 197, 0.10);
   --today-line: #3fe0c5;
+  --placeholder: #84909b;
+  --total: #93bfff;
+  --total-bg: rgba(105, 163, 255, .08);
+  --remaining: #f0c86e;
+  --remaining-bg: rgba(240, 200, 110, .10);
+  --near: #69d9cb;
+  --near-bg: rgba(63, 224, 197, .10);
+  --complete: #7cdda0;
+  --complete-bg: rgba(87, 240, 166, .10);
+  --overtime-bg: rgba(255, 107, 94, .12);
 }
 
 * { box-sizing: border-box; }
@@ -101,6 +111,10 @@ html[data-theme="excel"] .navitem:hover { background: #e8eaed; }
   gap: 8px;
   margin-bottom: 10px;
 }
+button:focus-visible, a:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 2px;
+}
 .weeknav {
   display: flex;
   align-items: center;
@@ -178,6 +192,7 @@ html[data-theme="excel"] .todaybtn:hover { background: #e8eaed; }
   font-size: 12px;
   font-weight: 700;
 }
+.settinghint { font-size: 10px; color: var(--muted); white-space: nowrap; }
 .settinginput {
   width: 86px;
   height: 28px;
@@ -265,7 +280,7 @@ table#grid {
   outline: none;
   caret-color: var(--mint);
 }
-.cellinput::placeholder { color: #4a555d; }
+.cellinput::placeholder { color: var(--placeholder); font-weight: 400; opacity: .85; }
 .cellinput:focus {
   background: #0f211d;
   box-shadow: inset 0 0 0 1.5px var(--mint);
@@ -348,15 +363,33 @@ table#grid {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-.summary .cell:last-child { border-right: 0; }
+.summary .cell:nth-child(6) { border-right: 0; }
 .summary .label {
-  background: var(--mint-deep);
-  color: var(--mint);
+  background: var(--panel-2);
+  color: var(--muted);
   font-weight: 700;
   font-size: 12px;
   letter-spacing: .2px;
 }
 .summary .val { font-weight: 800; color: var(--text); letter-spacing: .3px; }
+.summary .val small { margin-left: 6px; font-size: 10px; font-weight: 500; letter-spacing: 0; }
+#sCumNow, #sCumPlan { color: var(--total); background: var(--total-bg); }
+#sTarget { color: var(--muted); font-weight: 600; }
+.summary [data-tone="remaining"] { color: var(--remaining); background: var(--remaining-bg); }
+.summary [data-tone="near"] { color: var(--near); background: var(--near-bg); }
+.summary [data-tone="complete"] { color: var(--complete); background: var(--complete-bg); }
+.summary [data-tone="overtime"] { color: var(--red); background: var(--overtime-bg); }
+.summary-progress { grid-column: 1 / -1; height: 4px; background: var(--panel-2); }
+.summary-progress span { display: block; height: 100%; background: currentColor; }
+@media (max-height: 600px) {
+  .wrap { padding: 8px 12px 10px; }
+  .topbar { margin-bottom: 8px; }
+  .settingbar { margin-bottom: 8px; }
+  #grid th, #grid td { height: 31px; }
+  .summary .cell { height: 34px; }
+  .sumcap { margin-top: 7px; }
+  .status { margin-top: 6px; }
+}
 .summary.week { margin-top: 8px; }
 .summary .val.ot { color: var(--red); }   /* 주 40시간 초과(연장) */
 
@@ -405,6 +438,16 @@ html[data-theme="excel"] {
   --red: #d93025;
   --today: rgba(24, 128, 56, .10);
   --today-line: #188038;
+  --placeholder: #8a929c;
+  --total: #2962a7;
+  --total-bg: #f0f5fc;
+  --remaining: #956000;
+  --remaining-bg: #fff7e5;
+  --near: #087f82;
+  --near-bg: #e9f6f4;
+  --complete: #188038;
+  --complete-bg: #e6f4ea;
+  --overtime-bg: #fceceb;
 }
 
 /* 다크 테마에서 변수 없이 하드코딩됐던 색들의 라이트 대응 */
@@ -412,7 +455,6 @@ html[data-theme="excel"] .navbtn:hover { background: #e8eaed; }
 html[data-theme="excel"] .themebtn:hover { background: #e8eaed; }
 html[data-theme="excel"] .rowlabel { background: #f8f9fa; color: #5f6368; }
 html[data-theme="excel"] #grid thead th.corner { background: #f1f3f4; }
-html[data-theme="excel"] .cellinput::placeholder { color: #9aa0a6; }
 html[data-theme="excel"] .cellinput:focus { background: #e8f0fe; box-shadow: inset 0 0 0 1.5px #188038; }
 html[data-theme="excel"] .typesel:focus { background: #e6f4ea; }
 html[data-theme="excel"] .type-연차 { background: rgba(234, 153, 0, .14); color: #b06000; }
@@ -517,7 +559,8 @@ html[data-theme="excel"] .navbtn { color: #188038; }
   border-radius: 10px;
   background: var(--panel);
   overflow: auto;
-  max-height: calc(100vh - 118px);
+  /* 식단바(약 54px) + 하단 여백(14px)만 빼서, 창 높이에 맞춰 이미지가 스크롤 없이 들어가게 */
+  max-height: calc(100vh - 68px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -779,13 +822,15 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
 .wrap.ttree-mode table#grid,
 .wrap.ttree-mode .sumcap,
 .wrap.ttree-mode .summary,
-.wrap.ttree-mode #statusLine { display: none; }
+.wrap.ttree-mode #statusLine,
+.wrap.ttree-mode #mealPanel { display: none; }
 
 .ttree-shell {
   display: grid;
   grid-template-columns: minmax(400px, 460px) minmax(300px, 1fr);
   gap: 10px;
   align-items: start;
+  padding: 0;
 }
 .ttree-modal,
 .ttree-status-panel {
@@ -813,7 +858,7 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
 }
 .ttree-modal-body {
   padding: 12px 12px 10px;
-  max-height: calc(100vh - 130px);
+  max-height: max(150px, calc(100vh - 130px));
   overflow: auto;
 }
 .ttree-section-title {
@@ -840,6 +885,17 @@ html[data-theme="excel"] .calchip.allday { color: #10201d; }
 .ttree-approver-row { align-items: start; min-height: 26px; }
 .ttree-form { display: block; }
 .ttree-form[hidden] { display: none; }
+.ttree-form label[hidden] { display: none; }
+.ttree-overtime-note {
+  padding: 9px 11px;
+  margin-bottom: 10px;
+  border: 1px solid var(--mint-dim);
+  border-radius: 7px;
+  background: var(--mint-deep);
+  color: var(--mint);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .ttree-input,
 .ttree-select,
 .ttree-textarea {

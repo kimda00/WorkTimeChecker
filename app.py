@@ -421,6 +421,54 @@ class Api:
         except Exception as e:
             return {"status": "empty", "message": str(e)}
 
+    def bus_info(self):
+        """배포 기본 키(config.json busApiKey) 유무만 — 키 값은 화면에 넘기지 않는다."""
+        try:
+            import bus
+            return {"defaultKey": bus.has_default_key()}
+        except Exception:
+            return {"defaultKey": False}
+
+    def bus_search(self, query):
+        """지도 이동용 장소 검색(OSM Nominatim). 반환: places[{name,detail,lat,lng}]"""
+        try:
+            import bus
+            return bus.search_place(query)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def bus_nearby(self, lat, lng, radius=None, api_key=None):
+        """지도 중심 근처 정류장. config.json 키가 있으면 경기도 API/TAGO, 없으면 OSM(데모 배차)."""
+        try:
+            import bus
+            return bus.nearby_stops(lat, lng, radius, api_key or None)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def bus_stop_routes(self, stop, api_key=None):
+        """정류장 경유 노선 프로필(첫차·막차·요일별 배차·정류장 오프셋)."""
+        try:
+            import bus
+            return bus.stop_routes(stop, api_key or None)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def bus_tile(self, z, x, y):
+        """버스 지도 배경 타일(OSM, 캐시) — data URI. 실패 시 None."""
+        try:
+            import bus
+            return bus.tile(z, x, y)
+        except Exception:
+            return None
+
+    def bus_arrivals(self, stop, api_key=None):
+        """실시간 도착 예정(TAGO 정류장 + 키가 있을 때만)."""
+        try:
+            import bus
+            return bus.arrivals(stop, api_key or None)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def open_url(self, url):
         """식단 원본 등 그룹웨어 링크를 기본 브라우저로 연다(그룹웨어 도메인만 허용)."""
         try:
@@ -509,9 +557,22 @@ def ehr_login_tray(icon=None, item=None):
     threading.Thread(target=run, daemon=True).start()
 
 
+def _flush_ui_state():
+    """종료 직전 화면의 최신 상태를 바로 저장한다(0.4초 디바운스 저장을 기다리던 변경도 잃지 않도록)."""
+    if not window:
+        return
+    try:
+        raw = window.evaluate_js("typeof state === 'object' && state && state.settings ? JSON.stringify(state) : ''")
+        if raw:
+            save_data(json.loads(raw))
+    except Exception:
+        pass
+
+
 def quit_app(icon=None, item=None):
     global _quitting
     _quitting = True
+    _flush_ui_state()
     try:
         if icon is not None:
             icon.stop()

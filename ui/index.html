@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>근태</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -20,6 +21,7 @@
     <div class="topbar">
       <nav class="viewnav" aria-label="화면 이동">
         <button id="workBtn" class="viewbtn active" aria-current="page" title="근무시간 보기">근무</button>
+        <button id="busBtn" class="viewbtn" title="퇴근 버스 · 정류장 설정">버스</button>
         <button id="calBtn" class="viewbtn" title="그룹웨어 캘린더 일정 보기">캘린더</button>
         <button id="mealBtn" class="viewbtn" title="이번 주 식단표 보기">식단</button>
         <button id="ttreeBtn" class="viewbtn" title="TTree 휴가/출장 신청 및 현황">TTree</button>
@@ -62,6 +64,7 @@
         <tr id="rowOut"><th class="snum">4</th><th class="rowlabel">퇴근 시간</th></tr>
         <tr id="rowWork"><th class="snum">5</th><th class="rowlabel">근무 시간</th></tr>
         <tr id="rowEstOut"><th class="snum">6</th><th class="rowlabel">예상 퇴근</th></tr>
+        <tr id="rowBus" hidden><th class="snum">7</th><th class="rowlabel" title="버스 도착 N분 전을 예정 퇴근으로 계산">퇴근 버스</th></tr>
       </tbody>
     </table>
 
@@ -126,6 +129,49 @@
             <button id="calSelNone" class="calselbtn" title="모든 캘린더 숨김">전체 해제</button>
           </div>
           <div id="calLegend" class="callegend"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="busPanel" class="buspanel">
+      <div class="busbar">
+        <form id="busSearchForm" class="bussearch" autocomplete="off">
+          <input id="busSearch" class="businput" placeholder="장소 검색 (예: 판교역)" aria-label="장소 검색" />
+          <button class="themebtn" type="submit">검색</button>
+          <div id="busPlaces" class="busplaces" hidden></div>
+        </form>
+        <button id="busScan" class="themebtn" title="지도 중심 근처 정류장 찾기">이 지역 정류장</button>
+        <span id="busStatus" class="calstatus"></span>
+      </div>
+      <div class="busbody">
+        <div class="busmapwrap">
+          <div id="busMap" class="busmap" aria-label="정류장 지도"></div>
+          <div id="busMapHint" class="busmaphint">장소를 검색하거나 지도를 옮긴 뒤 ‘이 지역 정류장’을 누르세요</div>
+        </div>
+        <div class="busside">
+          <div class="bustabs" role="tablist" aria-label="버스 정보">
+            <button id="busTabToday" class="bustab active" type="button" role="tab" aria-selected="true">오늘의 버스</button>
+            <button id="busTabStop" class="bustab" type="button" role="tab" aria-selected="false" hidden>정류장</button>
+          </div>
+          <section id="busTodayPane" class="buscard grow" role="tabpanel">
+            <div class="buscardhead"><strong id="busTodayTitle">오늘의 버스</strong><span id="busNeed" class="busneed"></span></div>
+            <div class="bussaved">
+              <button id="busStopEdit" class="busstopbtn" type="button" disabled>퇴근 정류장 미설정</button>
+              <label class="busbuffer">도착 <input id="busBuffer" class="businput num" inputmode="numeric" aria-label="도착 몇 분 전 퇴근" /> 분 전</label>
+            </div>
+            <div id="busSrc" class="bussrc"></div>
+            <div id="busLive" class="buslive" hidden></div>
+            <div id="busToday" class="buslist"></div>
+          </section>
+          <section id="busStopPane" class="buscard grow" role="tabpanel" hidden>
+            <div class="buscardhead"><strong id="busPrevName"></strong><span id="busPrevMeta" class="bussrc"></span></div>
+            <div id="busPrevLive" class="buslive" hidden></div>
+            <div id="busPrevRoutes" class="buslist"></div>
+            <div class="busprevfoot">
+              <small>체크한 버스가 오늘의 버스에 보여요</small>
+              <button id="busPrevSave" class="ehrbtn" type="button" disabled>이 정류장으로 저장</button>
+            </div>
+          </section>
         </div>
       </div>
     </div>
@@ -261,6 +307,8 @@
       </div>
     </div>
   </div>
+  <div id="busPop" class="buspop" role="dialog" aria-label="퇴근 버스 선택" hidden></div>
+  <script src="vendor/leaflet/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -2816,7 +2816,7 @@ function tripSettings() {
   const s = (state && state.settings) || {};
   const cap = parseInt(s.approvalMealCap, 10);
   return { rate: parseInt(s.approvalTripRate, 10) || TRIP_DEFAULT_RATE, mealCap: isFinite(cap) && cap >= 0 ? cap : TRIP_DEFAULT_MEAL_CAP,
-           mode: s.approvalTripMode === 'public' ? 'public' : 'car',
+           mode: tripModeOf(s.approvalTripMode),
            km: (s.approvalTripKm && typeof s.approvalTripKm === 'object') ? s.approvalTripKm : {} };
 }
 // approval.compose_trip_title 과 같은 규칙: 'YY/MM/DD 목적지', 여러 날이면 '~DD' 또는 '~MM/DD'.
@@ -2830,15 +2830,17 @@ function tripTitleText(start, end, dest) {
   if (e > s) head += '~' + ((e.getFullYear() === s.getFullYear() && e.getMonth() === s.getMonth()) ? p2(e.getDate()) : p2(e.getMonth() + 1) + '/' + p2(e.getDate()));
   return (head + ' ' + dest).trim();
 }
+// 'car' 자차 / 'public' 대중교통(법인카드 승차권) / 'public_personal' 대중교통(개인카드 승차권)
+function tripModeOf(v) { return (v === 'public' || v === 'public_personal') ? v : 'car'; }
 function tripInputs() {
   const v = id => (document.getElementById(id)?.value || '').trim();
   const n = id => { const x = parseFloat(v(id).replace(/,/g, '')); return isFinite(x) && x > 0 ? Math.round(x) : 0; };
   const start = v('tripStart');
   const capRaw = v('tripMealCap');
-  const mode = v('tripMode') === 'public' ? 'public' : 'car';
+  const mode = tripModeOf(v('tripMode'));
   return { start, end: v('tripEnd') || start, dest: v('tripDest'), mode,
            km: mode === 'car' ? n('tripKm') : 0, rate: n('tripRate') || tripSettings().rate, toll: mode === 'car' ? n('tripToll') : 0,
-           lodging: n('tripLodging'), fare: mode === 'public' ? n('tripFare') : 0,
+           lodging: n('tripLodging'), fare: mode === 'public_personal' ? n('tripFare') : 0,
            meals: !!document.getElementById('tripMeals')?.checked,
            mealCap: capRaw === '' ? tripSettings().mealCap : n('tripMealCap') };
 }
@@ -2847,7 +2849,7 @@ function tripRowsText(t) {
   const rows = [];
   if (t.mode === 'public') rows.push('승차권: 출장 전 두 달치 법인카드 내역 중 버스·철도·항공 결제(폼을 열 때 조회)');
   if (t.meals) rows.push('식대: 출장 기간 법인카드 내역(폼을 열 때 조회' + (t.mealCap ? ', 끼당 ' + won(t.mealCap) + ' 상한' : '') + ')');
-  if (t.fare) rows.push('교통(개인 결제) ' + won(t.fare));
+  if (t.fare) rows.push('승차권(개인카드) ' + won(t.fare));
   if (t.km) rows.push('유류대 ' + won(t.km * t.rate) + ' (왕복 ' + t.km + 'km × ' + t.rate + '원)');
   if (t.toll) rows.push('톨비 ' + won(t.toll));
   if (t.lodging) rows.push('숙박 ' + won(t.lodging));
@@ -2912,7 +2914,7 @@ function applyTripKmMemory() {
 }
 // 이동 수단에 따라 자차 칸(거리·단가·하이패스)과 대중교통 칸(조회 일수·개인 교통비)을 바꿔 보인다.
 function applyTripMode() {
-  const mode = (document.getElementById('tripMode')?.value === 'public') ? 'public' : 'car';
+  const mode = tripModeOf(document.getElementById('tripMode')?.value);
   document.querySelectorAll('#approvalPanel label[data-mode]').forEach(l => { l.hidden = l.dataset.mode !== mode; });
 }
 function initTripPanel() {
@@ -2921,7 +2923,7 @@ function initTripPanel() {
   const modeSel = document.getElementById('tripMode');
   modeSel.value = tripSettings().mode;
   modeSel.addEventListener('change', () => {
-    if (state && state.settings) { state.settings.approvalTripMode = modeSel.value === 'public' ? 'public' : 'car'; scheduleSave(); }
+    if (state && state.settings) { state.settings.approvalTripMode = tripModeOf(modeSel.value); scheduleSave(); }
     applyTripMode(); refreshTripSheet();
   });
   applyTripMode();
@@ -2975,6 +2977,7 @@ async function openTripForm() {
   if (!t.dest) { setTripMsg('목적지를 입력해주십시오.', 'err'); return; }
   if (!name) { setTripMsg('이름(지급처)을 위 지출결의서 칸에 입력해주십시오.', 'err'); return; }
   if (t.mode === 'car' && !t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없습니다 — 거리·톨비·숙박·식대 중 하나를 입력해주십시오.', 'err'); return; }
+  if (t.mode === 'public_personal' && !t.fare) { setTripMsg('개인카드로 결제한 승차권 금액을 입력해주십시오.', 'err'); return; }
   if (tripPayday == null) await lookupTripPayday();
   if (t.km && state && state.settings) {   // 목적지별 왕복 km 기억
     const km = Object.assign({}, tripSettings().km); km[t.dest] = t.km;

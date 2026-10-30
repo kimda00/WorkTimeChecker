@@ -592,18 +592,31 @@ class WorkTimeUI(unittest.TestCase):
         pick.select_option('')
         pick.select_option('0')
         self.assertEqual(self.page.locator('#tripKm').input_value(), '278')
-        # 대중교통: 자차 칸이 숨고 개인 교통비 칸이 보인다. 거리·톨비는 보내지 않는다.
+        # 대중교통(법인카드 승차권): 자차 칸·승차권 금액 칸이 숨고 승차권은 카드내역에서 가져온다. 거리·톨비는 보내지 않는다.
         self.page.locator('#tripMode').select_option('public')
         self.assertTrue(self.page.locator('#tripKm').is_hidden())
-        self.page.locator('#tripFare').fill('16900')
+        self.assertTrue(self.page.locator('#tripFare').is_hidden())
         self.assertIn('승차권: 출장 전 두 달치 법인카드 내역 중 버스·철도·항공 결제', self.text('#tripRows'))
-        self.assertIn('교통(개인 결제) 16,900원', self.text('#tripRows'))
         self.assertNotIn('유류대', self.text('#tripRows'))
         self.page.locator('#tripOpen').click()
         self.page.wait_for_function("apprCalls.filter(c => c[0] === 'prefill').length === 2")
         p = self.page.evaluate('apprCalls')[-1][1]
-        self.assertEqual((p['mode'], p['fare'], p['km'], p['toll'], p['meals']), ('public', 16900, 0, 0, True))
+        self.assertEqual((p['mode'], p['fare'], p['km'], p['toll'], p['meals']), ('public', 0, 0, 0, True))
         self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripMode === 'public'")
+        # 대중교통(개인카드 승차권): 승차권 금액 칸만 보이고 금액이 없으면 열지 않는다.
+        self.page.locator('#tripMode').select_option('public_personal')
+        self.assertTrue(self.page.locator('#tripKm').is_hidden())
+        self.assertTrue(self.page.locator('#tripFare').is_visible())
+        self.assertNotIn('승차권: 출장 전', self.text('#tripRows'))
+        self.page.locator('#tripOpen').click()
+        self.page.wait_for_function("document.getElementById('tripMsg').textContent.includes('승차권 금액')")
+        self.page.locator('#tripFare').fill('16900')
+        self.assertIn('승차권(개인카드) 16,900원', self.text('#tripRows'))
+        self.page.locator('#tripOpen').click()
+        self.page.wait_for_function("apprCalls.filter(c => c[0] === 'prefill').length === 3")
+        p = self.page.evaluate('apprCalls')[-1][1]
+        self.assertEqual((p['mode'], p['fare'], p['km'], p['toll'], p['meals']), ('public_personal', 16900, 0, 0, True))
+        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripMode === 'public_personal'")
 
     def test_approval_base_project_is_resolved_saved_and_sent_with_prefill(self):
         self.page.evaluate("""() => {

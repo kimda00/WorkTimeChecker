@@ -27,7 +27,7 @@ class TripHelpers(unittest.TestCase):
         rows = approval.trip_rows({"start": "2026-11-03", "km": 100, "rate": 300, "lodging": 80000})
         self.assertEqual([(r["kind"], r["amount"]) for r in rows], [("fuel", 30000), ("lodging", 80000)])
         rows = approval.trip_rows({"start": "2026-02-19", "fare": "33,800"})
-        self.assertEqual([(r["kind"], r["acct"], r["amount"], r["detail"]) for r in rows], [("fare", "6071", 33800, "출장 교통비(개인 결제 승차권)")])
+        self.assertEqual([(r["kind"], r["acct"], r["amount"], r["detail"]) for r in rows], [("fare", "6071", 33800, "출장 교통비(개인카드 결제 승차권)")])
         self.assertEqual(approval.trip_rows({"start": "2026-11-03"}), [])
         self.assertEqual(approval.trip_rows({"start": "2026-11-03", "km": "abc", "toll": -5}), [])
 

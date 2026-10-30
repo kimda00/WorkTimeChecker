@@ -256,7 +256,7 @@ def trip_rows(payload):
     rows = []
     if fare > 0:
         rows.append({"kind": "fare", "acct": TRIP_ACCTS["transport"], "amount": fare, "date": date,
-                     "detail": "출장 교통비(개인 결제 승차권)"})
+                     "detail": "출장 교통비(개인카드 결제 승차권)"})
     if km > 0:
         rows.append({"kind": "fuel", "acct": TRIP_ACCTS["fuel"], "amount": km * rate, "date": date,
                      "detail": "왕복 %dkm(자차 이용)" % km})
@@ -635,7 +635,7 @@ def prefill_trip(payload):
     """출장비용지급품의 폼을 열어 제목·지급처·지급요청일 + 식대(카드내역) + 유류대·톨비·숙박 행을 채운다.
     payload: {title?, payee, payday, project, start, end, dest, mode, km, rate, toll, lodging, fare, meals, mealCap}.
     mode 'car'(기본): 출장 기간의 카드내역 전부(식대) + 유류대·톨비 행. 'public': 출장 tripTicketLookback일(기본 60) 전부터의 카드내역에서
-    승차권(교통 키워드)과 출장 기간 식대만 골라 오고 개인 결제 교통비(fare) 행.
+    승차권(교통 키워드)과 출장 기간 식대만 골라 온다. 'public_personal': 카드내역은 car 와 같이 출장 기간 식대만, 승차권은 fare 로 개인카드 행.
     mealCap(기본 12,000, 0 이면 제한 없음)을 넘는 식대 행은 공급가액을 상한으로 깎는다."""
     payload = dict(payload or {})
     meal_cap = _num(payload["mealCap"]) if "mealCap" in payload else DEFAULT_MEAL_CAP

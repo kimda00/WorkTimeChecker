@@ -531,10 +531,186 @@ def _gbis_arrivals(sid, key):
     rows = _gbis("busarrivalservice/v2/getBusArrivalListv2", {"stationId": sid}, key, "busArrivalList")
     out = []
     for r in rows:
-        for n in ("1", "2"):                          # 다가오는 버스 2대까지(분 단위)
+        for n in ("1", "2"):                          # 다가오는 버스 2대까지(초 단위가 있으면 초, 없으면 분)
             if str(r.get("predictTime" + n) or "").strip():
-                out.append({"no": str(r.get("routeName")), "id": str(r.get("routeId")),
-                            "sec": _num(r.get("predictTime" + n)) * 60, "prev": _num(r.get("locationNo" + n))})
+                a = {"no": str(r.get("routeName")), "id": str(r.get("routeId")),
+                     "sec": _num(r.get("predictTimeSec" + n)) or _num(r.get("predictTime" + n)) * 60,
+                     "prev": _num(r.get("locationNo" + n))}
+                if r.get("vehId" + n):                # 차량 id — 도착 기록에서 같은 버스를 이어 보려고
+                    a["veh"] = str(r.get("vehId" + n))
+                out.append(a)
+    return out
+
+
+# ------------------------------------------------------------------ 도착 기록 (지난번 기준 시간표)
+# 경기도 · TAGO API 는 지금 다가오는 버스(노선마다 2대)만 주고 지난 도착 기록은 주지 않는다.
+# 그래서 실시간 도착을 받을 때마다 곧 올 버스를 지켜보다가, 정류장 바로 앞에서 보이던 버스가 목록에서
+# 빠지면 그 도착 예정 시각을 실제 도착으로 기록한다(정류장 · 날짜 · 노선별, 최근 10주).
+# 화면은 같은 요일 종류(평일 · 토 · 일/공휴일) 기록을 회차별로 묶어 대표 시각과 가장 빨랐던 · 늦었던
+# 시각으로 쓴다 — 카카오맵 '버스 예상시간표'와 같은 방식.
+HIST_KEEP_DAYS = 70          # 최근 10주
+HIST_NEAR_SEC = 150          # 마지막으로 볼 때 이만큼 안에 오던 버스가 빠지면 '정류장을 지나갔다'
+HIST_GAP_SEC = 300           # 조회가 이보다 오래 끊기면 기록 구간을 새로 연다(그 사이 버스는 모른다)
+HIST_SAME_BUS_SEC = 240      # 차량 id 가 없을 때(TAGO) 같은 노선 · 이 차이 안의 예정은 같은 버스
+HIST_TRIP_SEC = 240          # 날짜가 다른 기록을 같은 회차로 묶는 간격
+_hist_lock = threading.Lock()
+_hist_pending = {}           # 정류장 키 → 지켜보는 버스 [{route, veh, eta, left, seen}] (앱이 켜져 있는 동안만)
+_hist_swept = ""             # 안 쓰는 정류장 기록 파일을 마지막으로 정리한 날(하루 한 번)
+
+
+def _stop_key(stop):
+    """도착 기록 파일 이름용 정류장 키(경기도 정류장이면 TAGO 로 저장했어도 같은 키)."""
+    sid = _gbis_id(stop)
+    if sid:
+        return "gbis_" + re.sub(r"\W", "", sid)
+    if _tago_ready(stop):
+        return "tago_%s_%s" % (re.sub(r"\W", "", str(stop["cityCode"])), re.sub(r"\W", "", str(stop["nodeId"])))
+    return None
+
+
+def _route_key(a):
+    """노선 기록 키: 경기도 routeId(TAGO 'GGB…' 는 앞을 뗀 값), 없으면 노선번호."""
+    rid = re.sub(r"^GGB", "", str(a.get("id") or ""))
+    return rid or "no:%s" % a.get("no")
+
+
+def _hist_path(skey):
+    return os.path.join(BUS_DIR, "history_%s.json" % skey)
+
+
+def _hist_read(skey):
+    try:
+        with open(_hist_path(skey), "r", encoding="utf-8") as f:
+            h = json.load(f)
+        if isinstance(h, dict) and isinstance(h.get("days"), dict):
+            return h
+    except Exception:
+        pass
+    return {"days": {}}
+
+
+def _hist_write(skey, h):
+    cut = time.strftime("%Y-%m-%d", time.localtime(time.time() - HIST_KEEP_DAYS * 86400))
+    h["days"] = {d: v for d, v in h["days"].items() if d >= cut}
+    os.makedirs(BUS_DIR, exist_ok=True)
+    path = _hist_path(skey)
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(h, f, ensure_ascii=False, separators=(",", ":"))
+    os.replace(path + ".tmp", path)
+    _sweep_histories()
+
+
+def _sweep_histories():
+    """10주 동안 새 기록이 없던 정류장 기록 파일(바꾸기 전 퇴근 정류장 · 미리보기로만 본 정류장)을 지운다.
+    날짜 정리는 기록할 때 그 정류장 파일 안에서만 되므로, 더 안 쓰는 정류장 파일은 여기서 통째로 지운다."""
+    global _hist_swept
+    today = time.strftime("%Y-%m-%d")
+    if _hist_swept == today:
+        return
+    _hist_swept = today
+    cut = time.time() - HIST_KEEP_DAYS * 86400
+    try:
+        names = os.listdir(BUS_DIR)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith("history_") and name.endswith((".json", ".json.tmp")):
+            path = os.path.join(BUS_DIR, name)
+            try:
+                if os.path.getmtime(path) < cut:
+                    os.remove(path)
+            except OSError:
+                pass
+
+
+def _local(ts):
+    """epoch → ('YYYY-MM-DD', 그날 0시부터 초)"""
+    t = time.localtime(ts)
+    return time.strftime("%Y-%m-%d", t), t.tm_hour * 3600 + t.tm_min * 60 + t.tm_sec
+
+
+def record_arrivals(stop, arrivals, now=None):
+    """실시간 도착을 한 번 받은 결과로 도착 기록을 갱신한다: 조회한 구간 + 정류장을 지나간 버스."""
+    skey = _stop_key(stop or {})
+    if not skey:
+        return
+    now = time.time() if now is None else now
+    with _hist_lock:
+        h = _hist_read(skey)
+        day, tod = _local(now)
+        cover = h["days"].setdefault(day, {"cover": [], "arr": {}})["cover"]
+        if cover and cover[-1][0] <= tod <= cover[-1][1] + HIST_GAP_SEC:
+            cover[-1][1] = tod
+        else:
+            cover.append([tod, tod])
+        watch = _hist_pending.setdefault(skey, [])
+        seen = set()
+        for a in arrivals or []:
+            route, veh, eta = _route_key(a), str(a.get("veh") or ""), now + _num(a.get("sec"))
+            cands = [p for p in watch if id(p) not in seen and p["route"] == route
+                     and (p["veh"] == veh if veh and p["veh"] else abs(p["eta"] - eta) <= HIST_SAME_BUS_SEC)]
+            p = min(cands, key=lambda p: abs(p["eta"] - eta)) if cands else None
+            if p is None:
+                p = {"route": route, "veh": veh}
+                watch.append(p)
+            p.update(eta=eta, left=eta - now, seen=now)
+            seen.add(id(p))
+        for p in [p for p in watch if id(p) not in seen]:
+            watch.remove(p)
+            # 정류장 바로 앞에서 보였고 그 뒤로 조회가 끊기지 않았으면 그 예정 시각에 지나간 것
+            if p["left"] <= HIST_NEAR_SEC and now - p["seen"] <= HIST_GAP_SEC:
+                aday, atod = _local(min(p["eta"], now))
+                arr = h["days"].setdefault(aday, {"cover": [], "arr": {}})["arr"]
+                arr.setdefault(p["route"], []).append(int(atod))
+        _hist_write(skey, h)
+
+
+def _day_kind(day, hol):
+    t = time.strptime(day, "%Y-%m-%d")
+    if t.tm_wday == 6 or day in hol:
+        return "sun"                       # 일요일 · 공휴일 배차
+    return "sat" if t.tm_wday == 5 else "wd"
+
+
+def _korean_holidays(days):
+    try:
+        import holidays
+        years = sorted({int(d[:4]) for d in days})
+        return {d.isoformat() for d in holidays.SouthKorea(years=years)} if years else set()
+    except Exception:
+        return set()
+
+
+def _merge_spans(spans):
+    out = []
+    for s, e in sorted(spans):
+        if out and s <= out[-1][1] + 60:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return out
+
+
+def _minute(sec):
+    return int(sec + 30) // 60 * 60
+
+
+def _trips(obs):
+    """[(날짜, 하루 초)] → 회차 [{at: 가운데 시각, lo: 가장 빠름, hi: 가장 늦음, n: 날짜 수}] (분 단위).
+    시각순으로 가까운 기록끼리 묶되, 같은 날 두 대는 다른 회차다."""
+    groups = []
+    for day, sec in sorted(obs, key=lambda x: x[1]):
+        g = groups[-1] if groups else None
+        if g is None or day in g["days"] or sec - g["secs"][-1] > HIST_TRIP_SEC or sec - g["secs"][0] > 2 * HIST_TRIP_SEC:
+            g = {"secs": [], "days": set()}
+            groups.append(g)
+        g["secs"].append(sec)
+        g["days"].add(day)
+    out = []
+    for g in groups:
+        s, m = g["secs"], len(g["secs"]) // 2
+        mid = s[m] if len(s) % 2 else (s[m - 1] + s[m]) / 2
+        out.append({"at": _minute(mid), "lo": _minute(s[0]), "hi": _minute(s[-1]), "n": len(g["days"])})
     return out
 
 
@@ -616,7 +792,33 @@ def arrivals(stop, api_key=None):
     except Exception as e:
         return {"status": "error", "message": "실시간 도착 조회 실패: %s" % e}
     out.sort(key=lambda a: a["sec"])
+    try:
+        record_arrivals(stop, out)
+    except Exception:
+        pass                                   # 기록 실패가 실시간 도착을 막지 않게
     return {"status": "ok", "arrivals": out}
+
+
+def history(stop):
+    """정류장 도착 기록을 요일 종류(wd · sat · sun)별 시간표로: {days, cover: 기록한 구간, routes: 노선 키 → 회차}"""
+    skey = _stop_key(stop or {})
+    if not skey:
+        return {"status": "unsupported"}
+    with _hist_lock:
+        days = _hist_read(skey)["days"]
+    hol = _korean_holidays(days)
+    kinds = {}
+    for day, d in sorted(days.items()):
+        k = kinds.setdefault(_day_kind(day, hol), {"days": 0, "cover": [], "obs": {}})
+        k["days"] += 1
+        k["cover"].extend(list(c) for c in d.get("cover") or [])
+        for route, secs in (d.get("arr") or {}).items():
+            k["obs"].setdefault(route, []).extend((day, s) for s in secs)
+    return {"status": "ok", "kinds": {kind: {
+        "days": k["days"],
+        "cover": _merge_spans(k["cover"]),
+        "routes": {r: _trips(o) for r, o in k["obs"].items()},
+    } for kind, k in kinds.items()}}
 
 
 if __name__ == "__main__":

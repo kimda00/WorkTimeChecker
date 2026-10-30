@@ -469,6 +469,14 @@ class Api:
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
+    def bus_history(self, stop):
+        """정류장 도착 기록 시간표(요일 종류별 회차 · 기록한 구간). 실시간 도착을 받을 때마다 쌓인다."""
+        try:
+            import bus
+            return bus.history(stop)
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
     def open_url(self, url):
         """식단 원본 등 그룹웨어 링크를 기본 브라우저로 연다(그룹웨어 도메인만 허용)."""
         try:

@@ -629,6 +629,11 @@ function recompute() {
   setWeeklyProgress('progressPlan', planTotal, wTgt);
   renderEstimatedCheckoutCells(estimates);
   renderBusCells(mondayKey, wk, estimates);
+  // 버스 화면을 안 보고 있어도 예상 퇴근 앞뒤가 되면 도착 기록을 모으기 시작한다(1분에 한 번만 확인)
+  if (!busLiveTimer && !busLiveBusy && Math.floor(Date.now() / 60000) !== busRecMin) {
+    busRecMin = Math.floor(Date.now() / 60000);
+    if (busRecording()) refreshBusLive();
+  }
   if (viewMode === 'bus') {
     renderBusToday();
     if (busSideTab === 'live') renderBusLiveTab();
@@ -1214,6 +1219,14 @@ let busPreviewSeq = 0;        // 미리보기 요청 순번(그새 다른 정류
 let busSideTab = 'today';     // 오른쪽 열 탭: 'today' | 'live' | 'stop'
 let busLiveError = '';        // 마지막 실시간 조회 실패 사유(성공 · 미조회면 '')
 let busLiveTabSig = '';       // 실시간 탭 재렌더 판단(받은 시각 · 30초 경과 · 설정이 바뀔 때만)
+let busLiveBusy = false;      // 실시간 조회 중(버스 화면 · 백그라운드 기록이 겹쳐 두 번 부르지 않게)
+let busRecMin = -1;           // 백그라운드 기록 시작 여부를 마지막으로 본 분
+let busHist = null;           // 도착 기록 시간표 { id: 정류장 id, at: 받은 시각(ms), kinds: { wd|sat|sun: { days, cover, routes } } }
+// 같은 요일 종류 기록이 이만큼 쌓여야 시간표 대신 쓴다(하루치는 놓친 버스가 있을 수 있어서)
+const BUS_HIST_MIN_DAYS = 3;
+// 예상 퇴근 1시간 전 ~ 1시간 30분 뒤엔 버스 화면을 안 봐도 1분마다 실시간 도착을 받아 도착 기록을 쌓는다
+// (하루 약 150회 — 공공데이터포털 개발 계정 하루 1,000회 안)
+const BUS_REC_BEFORE = 60 * 60, BUS_REC_AFTER = 90 * 60;
 
 function busCfg() {
   const b = state.settings.bus || (state.settings.bus = {});
@@ -1246,16 +1259,23 @@ function busRouteTimes(route, date) {
   if (out[out.length - 1] < end + off - 60) out.push(end + off);      // 막차는 배차 간격과 상관없이 그 시각에 있다
   return out;
 }
-// 노선 하나의 그날 도착 시각 [{at, live}]. 실시간으로 보이는 구간은 실제 도착 예정으로 바꾼다
-// (그 사이 시간표상 버스는 실제로 없다 — 밤엔 배차가 대표값보다 김). liveFn: busLiveTimes() 결과.
-function busTimesWithLive(r, date, liveFn) {
-  let times = busRouteTimes(r, date);
+// 노선 하나의 그날 도착 시각 [{at, live, hist}]. 도착 기록이 쌓인 시간대는 시간표 대신 지난 기록(같은 요일 종류)으로,
+// 실시간으로 보이는 구간은 실제 도착 예정으로 바꾼다(그 사이 시간표상 버스는 실제로 없다 — 밤엔 배차가 대표값보다 김).
+// liveFn: busLiveTimes() 결과, hist: busHistFor() 결과.
+function busTimesWithLive(r, date, liveFn, hist) {
+  const grid = busRouteTimes(r, date);
+  let times = grid.map(at => ({ at }));
+  const trips = hist && hist.routes[busHistKey(r)];
+  if (trips && trips.length) {            // 한 번도 못 본 노선은 시간표 그대로(실시간에 잘 안 잡히는 노선일 수 있다)
+    const covered = t => hist.cover.some(([s, e]) => t >= s && t <= e);
+    times = times.filter(t => !covered(t.at)).concat(trips.map(h => ({ at: h.at, hist: h }))).sort((x, y) => x.at - y.at);
+  }
   const obs = liveFn ? liveFn(r) : [];
   if (obs.length) {
-    const until = obs[obs.length - 1] + (times.length > 1 ? (times[1] - times[0]) / 2 : 0);
-    times = obs.concat(times.filter(t => t > until));
+    const until = obs[obs.length - 1] + (grid.length > 1 ? (grid[1] - grid[0]) / 2 : 0);
+    times = obs.map(at => ({ at, live: true })).concat(times.filter(t => t.at > until));
   }
-  return times.map(at => ({ at, live: obs.includes(at) }));
+  return times;
 }
 // 그날 탈 수 있는 버스(체크한 노선) 도착순. leave = 도착 − N분 = 그 버스를 타려면 나서야 하는 시각.
 function busArrivalsOn(date) {
@@ -1263,11 +1283,46 @@ function busArrivalsOn(date) {
   const take = new Set(b.take);
   const buf = busBufferSec();
   const live = busLiveTimes(busLive, date);
+  const hist = busHistFor(date);
   const list = [];
   b.routes.filter(r => take.has(r.no)).forEach(r => {
-    busTimesWithLive(r, date, live).forEach(t => list.push({ route: r.no, at: t.at, leave: t.at - buf, live: t.live }));
+    busTimesWithLive(r, date, live, hist).forEach(t => list.push({ route: r.no, at: t.at, leave: t.at - buf, live: !!t.live, hist: t.hist }));
   });
   return list.sort((x, y) => x.at - y.at || x.route.localeCompare(y.route));
+}
+// 도착 기록 노선 키: 경기도 routeId(TAGO 'GGB…' 는 앞을 뗀 값), 없으면 노선번호 — bus.py _route_key 와 같게
+function busHistKey(r) { return r.id ? String(r.id).replace(/^GGB/, '') : 'no:' + r.no; }
+// 저장된 정류장의 그날 요일 종류 도착 기록(충분히 쌓였을 때만). 없으면 null
+function busHistFor(date) {
+  const h = busHistKind(date);
+  return h && h.days >= BUS_HIST_MIN_DAYS ? h : null;
+}
+function busHistKind(date) {
+  const b = busCfg();
+  return (busHist && b.stop && busHist.id === b.stop.id && busHist.kinds[busDayKind(date)]) || null;
+}
+async function loadBusHistory() {
+  const b = busCfg();
+  let res = null;
+  if (b.stop && apiReady('bus_history')) {
+    try { res = await pywebview.api.bus_history(b.stop); } catch (e) { res = null; }
+  }
+  busHist = res && res.status === 'ok' ? { id: b.stop.id, at: Date.now(), kinds: res.kinds || {} } : null;
+  busTodaySig = '';
+  renderBusSrc();
+  recompute();
+}
+// 지금이 백그라운드로 도착 기록을 모을 때인가: 근무일 · 실시간 되는 정류장 · 퇴근 앞뒤.
+// 기준은 입력한 퇴근, 없으면 고정 목표 시각(예상 퇴근은 목표를 넘기면 지금을 따라와서 창이 안 닫힌다).
+function busRecording() {
+  const b = busCfg();
+  if (!busLiveCapable(b.stop) || !busHasKey() || !apiReady('bus_arrivals')) return false;
+  const ti = todayInfo();
+  const cell = ti.dayKey ? weekData(ti.mondayKey)[ti.dayKey] : null;
+  if (!cell || BUS_OFF_TYPES.includes(effType(cell, ymd(new Date())))) return false;
+  const out = parseTimeToSec(cell.out);
+  const leave = out !== null ? out : busNeedSec(ti.mondayKey, ti.dayKey, 0), now = nowSec();
+  return leave !== null && now >= leave - BUS_REC_BEFORE && now <= leave + BUS_REC_AFTER;
 }
 // 노선 맞추기: TAGO 경기도 노선 id 는 'GGB' + 경기도 routeId 라서 앞 GGB 를 떼고 비교한다.
 function busLiveMatch(r, a) {
@@ -1297,10 +1352,11 @@ function busPlannedOut(cell, type) {
   return at === null ? null : Math.max(0, at - busBufferSec());
 }
 // 이 요일의 버스 선택만 빼고 계산한 예상 퇴근 = 그날 나서도 되는 가장 이른 시각(다른 요일 선택은 반영).
-function busNeedSec(mondayKey, dayKey) {
+// now 를 0 으로 주면 '목표를 채우면 지금'으로 따라오지 않는 고정 목표 시각.
+function busNeedSec(mondayKey, dayKey, now = nowSec()) {
   const wk = weekData(mondayKey);
   const probe = Object.assign({}, wk, { [dayKey]: Object.assign({}, wk[dayKey], { bus: null }) });
-  const est = estimateCheckouts(probe, state.settings, mondayKey, nowSec())[dayKey];
+  const est = estimateCheckouts(probe, state.settings, mondayKey, now)[dayKey];
   return est === undefined ? null : est;
 }
 function busDateOf(mondayKey, dayKey) {
@@ -1378,6 +1434,10 @@ function updateBusOutHints(wk) {
   });
 }
 
+// '지난 기록 4일 · 빠름 15:03 · 늦음 15:08'
+function busHistText(h) {
+  return '지난 기록 ' + h.n + '일' + (h.lo !== h.hi ? ' · 빠름 ' + fmt24(h.lo) + ' · 늦음 ' + fmt24(h.hi) : '');
+}
 // 버스 한 줄(요일 팝업 · 오늘의 버스 공용). ctx: { rec, pick, need, now(오늘이면) }
 function busOptionEl(x, ctx, onPick) {
   const btn = busEl('button', 'busopt');
@@ -1388,6 +1448,7 @@ function busOptionEl(x, ctx, onPick) {
   else if (isRec) btn.classList.add('rec');
   if (ctx.need !== null && ctx.need !== undefined && x.leave < ctx.need) btn.classList.add('early');
   if (x.live) btn.classList.add('live');
+  else if (x.hist) btn.classList.add('hist');
   const leave = busEl('span', 'busopt-leave');
   leave.append(busEl('b', '', fmt24(x.leave)), document.createTextNode(' 퇴근'));
   const tags = [];
@@ -1399,7 +1460,8 @@ function busOptionEl(x, ctx, onPick) {
     else tags.push(left >= 60 ? Math.floor(left / 60) + '시간 ' + (left % 60) + '분 후' : left + '분 후');
   }
   btn.append(busEl('span', 'busopt-at', fmt24(x.at)), busEl('span', 'busno', x.route), leave, busEl('span', 'busopt-tag', tags.join(' · ')));
-  btn.title = x.route + ' ' + fmt24(x.at) + ' 도착' + (x.live ? '(실시간)' : '') + ' → ' + fmt24(x.leave) + ' 퇴근' + (x.leave < (ctx.need || 0) ? ' (예상 퇴근보다 이름)' : '');
+  btn.title = x.route + ' ' + fmt24(x.at) + ' 도착' + (x.live ? '(실시간)' : x.hist ? '(' + busHistText(x.hist) + ')' : '(시간표 추정)')
+    + ' → ' + fmt24(x.leave) + ' 퇴근' + (x.leave < (ctx.need || 0) ? ' (예상 퇴근보다 이름)' : '');
   btn.addEventListener('click', onPick);
   return btn;
 }
@@ -1487,6 +1549,7 @@ function toggleBus() {
   else if (!busMap) initBusMap();
   else setTimeout(() => busMap.invalidateSize(), 0);
   refreshBusLive();
+  if (!busHist || Date.now() - busHist.at > 10 * 60000) loadBusHistory();     // 그사이 쌓인 도착 기록 반영
 }
 function setBusStatus(msg, cls) {
   const el = document.getElementById('busStatus');
@@ -1667,6 +1730,7 @@ function saveBusPreview() {
   renderBusSide();
   recompute();
   refreshBusLive();
+  loadBusHistory();
   setBusStatus('퇴근 정류장 저장 · ' + s.name + ' · 탈 버스 ' + b.take.length + '개', 'ok');
 }
 
@@ -1773,11 +1837,11 @@ function renderBusPreview() {
     meta.title = (r.kind ? r.kind + ' · ' : '') + (r.first ? r.first + '~' + r.last + ' · ' : '')
       + ['wd', 'sat', 'sun'].map(d => ({ wd: '평일', sat: '토', sun: '일/공휴일' })[d] + ' ' + (busIvText(r, d) || '운행 안 함')).join(' · ');
     const times = busEl('span', 'busprevtimes');
-    const next = busTimesWithLive(r, today, live).filter(t => t.at >= now).slice(0, 3);
+    const next = busTimesWithLive(r, today, live, p.saved ? busHistFor(today) : null).filter(t => t.at >= now).slice(0, 3);
     if (!next.length) times.textContent = !r.first ? '시간표 정보 없음 · 실시간만' : busRouteTimes(r, today).length ? '오늘 운행 끝' : '오늘 운행 안 함';
     next.forEach((t, i) => {
-      const el = busEl('b', t.live ? 'live' : '', fmt24(t.at));
-      el.title = t.live ? '실시간 도착 예정' : '시간표 추정';
+      const el = busEl('b', t.live ? 'live' : t.hist ? 'hist' : '', fmt24(t.at));
+      el.title = t.live ? '실시간 도착 예정' : t.hist ? busHistText(t.hist) : '시간표 추정';
       times.append(el);
       if (i === 0) times.append(busEl('small', '', Math.max(0, Math.round((t.at - now) / 60)) + '분 후'));
     });
@@ -1786,15 +1850,18 @@ function renderBusPreview() {
   });
 }
 
-// 배차 출처 + 오늘 실시간 보정 시각
+// 배차 출처 + 오늘 실시간 보정 시각 + 오늘 요일 종류의 도착 기록(며칠치)
 function renderBusSrc() {
   const b = busCfg();
   const parts = [...new Set(b.routes.map(r => BUS_SOURCE_LABEL[r.source] || r.source))];
   const fix = b.liveFixAt ? new Date(b.liveFixAt) : null;
   if (fix && ymd(fix) === ymd(new Date())) parts.push('실시간 보정 ' + pad(fix.getHours()) + ':' + pad(fix.getMinutes()));
+  const hk = busHistKind(new Date());
+  if (hk && hk.days) parts.push(hk.days >= BUS_HIST_MIN_DAYS ? '도착 기록 ' + hk.days + '일' : '도착 기록 모으는 중 ' + hk.days + '/' + BUS_HIST_MIN_DAYS + '일');
   const el = document.getElementById('busSrc');
   el.textContent = parts.join(' · ');
-  el.title = fix ? '실시간 도착 예정에 맞춰 노선별 정류장 도착 시각을 보정했어요' : '';
+  el.title = [fix ? '실시간 도착 예정에 맞춰 노선별 정류장 도착 시각을 보정했어요' : '',
+    hk && hk.days ? '점선 밑줄 시각 = 같은 요일 종류의 지난 도착 기록 기준(' + BUS_HIST_MIN_DAYS + '일 이상 쌓이면 사용)' : ''].filter(Boolean).join('\n');
 }
 
 // 오늘의 버스 탭 머리: 저장된 정류장(누르면 정류장 탭에서 탈 버스 변경) · 배차 출처 · N분 전
@@ -1914,7 +1981,7 @@ function busSnapPicks(routes) {
       const date = busDateOf(mondayKey, key);
       const at = r ? parseTimeToSec(cell.bus.at) : null;
       if (at === null || ymd(date) < todayStr) return;
-      const times = busRouteTimes(r, date);
+      const times = busTimesWithLive(r, date, null, busHistFor(date)).map(t => t.at);   // 기록 기준 시각을 고른 건 그대로
       const near = times.reduce((p, t) => (p === null || Math.abs(t - at) < Math.abs(p - at) ? t : p), null);
       const step = (times[1] - times[0]) || 0;
       if (near !== null && near !== at && Math.abs(near - at) <= step / 2) cell.bus.at = fmt24(near);
@@ -1943,22 +2010,29 @@ async function fetchBusLive() {
   return res;
 }
 
-// 버스 화면을 보는 동안 1분마다 실시간 도착 갱신(+ 보정)
+// 버스 화면을 보는 동안 · 예상 퇴근 앞뒤(도착 기록)엔 1분마다 실시간 도착 갱신(+ 보정). 받은 도착은 Python 이 기록한다.
 async function refreshBusLive() {
-  clearTimeout(busLiveTimer);
-  busLiveTimer = null;
-  // 방금(50초 안) 받은 실시간이 있으면 다시 부르지 않는다 — 배포 키 하루 호출 한도를 아끼려고
-  const fresh = busLive && Date.now() - busLive.at < 50000;
-  const res = viewMode !== 'bus' ? null : fresh ? { status: 'ok' } : await fetchBusLive();
-  if (!res || res.status !== 'ok') {
-    busLive = null;
-    if (res) setBusStatus('실시간 도착 조회 실패: ' + (res.message || '알 수 없음'), 'err');
+  if (busLiveBusy) return;
+  busLiveBusy = true;
+  try {
+    clearTimeout(busLiveTimer);
+    busLiveTimer = null;
+    const active = viewMode === 'bus' || busRecording();
+    // 방금(50초 안) 받은 실시간이 있으면 다시 부르지 않는다 — 배포 키 하루 호출 한도를 아끼려고
+    const fresh = busLive && Date.now() - busLive.at < 50000;
+    const res = !active ? null : fresh ? { status: 'ok' } : await fetchBusLive();
+    if (!res || res.status !== 'ok') {
+      busLive = null;
+      if (res) setBusStatus('실시간 도착 조회 실패: ' + (res.message || '알 수 없음'), 'err');
+    }
+    busLiveError = res && res.status !== 'ok' ? res.message || '알 수 없음' : '';
+    busTodaySig = '';
+    renderBusToday();
+    renderBusLiveTab();
+    if (res && active) busLiveTimer = setTimeout(refreshBusLive, 60000);
+  } finally {
+    busLiveBusy = false;
   }
-  busLiveError = res && res.status !== 'ok' ? res.message || '알 수 없음' : '';
-  busTodaySig = '';
-  renderBusToday();
-  renderBusLiveTab();
-  if (res && viewMode === 'bus') busLiveTimer = setTimeout(refreshBusLive, 60000);
 }
 
 // 공공데이터포털 키는 항상 config.json 의 busApiKey(exe 에 묶임)를 쓴다 — 화면에서 넣는 곳은 없고 값은 Python 에만 있다.
@@ -2581,6 +2655,7 @@ async function init() {
   refreshEhr(false);
   // TAGO 키(개인/배포 기본)가 있으면 실시간 도착으로 퇴근 버스 시간표를 한 번 보정(버스 화면을 안 열어도 그리드 추천에 반영)
   loadBusInfo().then(fetchBusLive);
+  loadBusHistory();
 }
 
 if (window.pywebview) {

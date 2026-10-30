@@ -1,5 +1,8 @@
 """Offline checks for bus.py (no network): .venv\\Scripts\\python -m unittest discover -s tests -p test_bus.py -v"""
+import json
+import os
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -7,11 +10,16 @@ import bus
 
 
 class BusTestCase(unittest.TestCase):
-    """개발 폴더 config.json 의 배포 키와 무관하게 '키 없음'을 기본으로 검사한다(네트워크 차단)."""
+    """개발 폴더 config.json 의 배포 키와 무관하게 '키 없음'을 기본으로 검사한다(네트워크 차단).
+    실시간 도착이 남기는 도착 기록은 임시 폴더에 쓴다."""
     def setUp(self):
-        p = patch.object(bus, "_config", return_value=None)
-        p.start()
-        self.addCleanup(p.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.bus_dir = tmp.name
+        for p in (patch.object(bus, "_config", return_value=None), patch.object(bus, "BUS_DIR", tmp.name),
+                  patch.dict(bus._hist_pending, clear=True), patch.object(bus, "_hist_swept", "")):
+            p.start()
+            self.addCleanup(p.stop)
 
 
 class DemoProfileTests(BusTestCase):
@@ -221,6 +229,104 @@ class DeployKeyTests(BusTestCase):
         with patch.object(bus, "_config", return_value="deploy"),                 patch.object(bus, "_tago_nearby", side_effect=lambda lat, lng, key: seen.append(key) or []):
             res = bus.nearby_stops(37.0, 127.0, 300, None)
         self.assertEqual((res["source"], seen), ("tago", ["deploy"]))
+
+
+def hm(text):
+    """'15:04' → 하루 초"""
+    h, m = text.split(":")
+    return int(h) * 3600 + int(m) * 60
+
+
+class HistoryTests(BusTestCase):
+    STOP = {"id": "gbis:204000158", "stationId": "204000158", "source": "gbis"}
+    DAY = time.strftime("%Y-%m-%d")                      # 기록은 최근 10주만 남기므로 오늘 날짜로
+
+    def poll(self, hhmm, *buses, stop=None):
+        """hhmm 에 실시간 도착을 받았다: buses = (노선 id, 남은 초, 차량 id)"""
+        now = time.mktime(time.strptime(self.DAY + " " + hhmm, "%Y-%m-%d %H:%M"))
+        arrivals = [{"no": "311", "id": rid, "sec": sec, **({"veh": veh} if veh else {})} for rid, sec, veh in buses]
+        bus.record_arrivals(stop or self.STOP, arrivals, now)
+
+    def saved(self, key="gbis_204000158"):
+        with open(os.path.join(self.bus_dir, "history_%s.json" % key), encoding="utf-8") as f:
+            return json.load(f)["days"][self.DAY]
+
+    def test_bus_seen_right_before_the_stop_is_recorded_when_it_passes(self):
+        self.poll("15:00", ("204000192", 600, "v1"))                   # 10분 전 — 지켜보기만
+        self.poll("15:04", ("204000192", 360, "v1"))
+        self.poll("15:08", ("204000192", 120, "v1"))                   # 2분 전
+        self.poll("15:09", ("204000192", 60, "v1"), ("204000192", 1500, "v2"))
+        self.poll("15:11", ("204000192", 1380, "v2"))                  # v1 이 빠짐 → 15:10 에 지나감
+        self.poll("15:12")                                            # v2 는 멀리서 사라짐 → 기록 안 함
+        day = self.saved()
+        self.assertEqual(day["arr"], {"204000192": [hm("15:10")]})
+        self.assertEqual(day["cover"], [[hm("15:00"), hm("15:12")]])
+
+    def test_without_vehicle_id_nearby_predictions_are_the_same_bus_and_gaps_are_not_guessed(self):
+        tago = {"id": "tago:31020:GGB204000158", "nodeId": "GGB204000158", "cityCode": "31020", "source": "tago"}
+        self.poll("15:00", ("GGB204000192", 180, None), stop=tago)    # TAGO: 차량 id 없음, 노선 id 에 GGB
+        self.poll("15:01", ("GGB204000192", 100, None), stop=tago)
+        self.poll("15:02", ("GGB204000192", 30, None), stop=tago)
+        self.poll("15:03", stop=tago)                                  # 15:02:30 에 지나감
+        self.poll("15:30", ("GGB204000192", 60, None), stop=tago)     # 조회가 27분 끊겼다가 다시
+        self.poll("15:50", stop=tago)                                  # 또 끊김 — 언제 지나갔는지 몰라 기록 안 함
+        day = self.saved()                                             # TAGO 로 저장한 경기도 정류장도 같은 기록 파일
+        self.assertEqual(day["arr"], {"204000192": [hm("15:02") + 30]})
+        self.assertEqual(day["cover"], [[hm("15:00"), hm("15:03")], [hm("15:30"), hm("15:30")], [hm("15:50"), hm("15:50")]])
+
+    def test_history_groups_same_trips_by_weekday_kind_with_earliest_and_latest(self):
+        days = {
+            "2026-10-26": {"cover": [[hm("15:00"), hm("17:00")]], "arr": {"204000192": [hm("15:04"), hm("15:36")]}},  # 월
+            "2026-10-27": {"cover": [[hm("15:00"), hm("17:00")]], "arr": {"204000192": [hm("15:08"), hm("15:32")],
+                                                                          "204000194": [hm("15:05"), hm("15:07")]}},  # 화
+            "2026-10-28": {"cover": [[hm("16:00"), hm("18:00")]], "arr": {"204000192": [hm("16:30")]}},               # 수
+            "2026-10-31": {"cover": [[hm("15:00"), hm("17:00")]], "arr": {"204000192": [hm("15:20")]}},               # 토
+            "2026-10-09": {"cover": [[hm("15:00"), hm("16:00")]], "arr": {"204000192": [hm("15:50")]}},               # 한글날(금)
+        }
+        os.makedirs(self.bus_dir, exist_ok=True)
+        with open(os.path.join(self.bus_dir, "history_gbis_204000158.json"), "w", encoding="utf-8") as f:
+            json.dump({"days": days}, f)
+        res = bus.history(self.STOP)
+        wd = res["kinds"]["wd"]
+        self.assertEqual((wd["days"], wd["cover"]), (3, [[hm("15:00"), hm("18:00")]]))
+        self.assertEqual(wd["routes"]["204000192"], [
+            {"at": hm("15:06"), "lo": hm("15:04"), "hi": hm("15:08"), "n": 2},
+            {"at": hm("15:34"), "lo": hm("15:32"), "hi": hm("15:36"), "n": 2},
+            {"at": hm("16:30"), "lo": hm("16:30"), "hi": hm("16:30"), "n": 1}])
+        self.assertEqual([t["at"] for t in wd["routes"]["204000194"]], [hm("15:05"), hm("15:07")])   # 같은 날 두 대는 따로
+        self.assertEqual((res["kinds"]["sat"]["days"], res["kinds"]["sun"]["days"]), (1, 1))          # 공휴일은 일요일 배차
+        self.assertEqual(bus.history({"source": "osm", "id": "osm:1"})["status"], "unsupported")
+
+    def test_old_days_and_unused_stop_files_are_removed(self):
+        ago = lambda days: time.strftime("%Y-%m-%d", time.localtime(time.time() - days * 86400))
+        mine = os.path.join(self.bus_dir, "history_gbis_204000158.json")
+        with open(mine, "w", encoding="utf-8") as f:
+            json.dump({"days": {ago(d): {"cover": [[54000, 54060]], "arr": {}} for d in (100, 71, 69, 1)}}, f)
+        files = {name: os.path.join(self.bus_dir, name) for name in
+                 ("history_gbis_1.json", "history_tago_25_X.json", "history_gbis_2.json.tmp", "osm_37.0_127.0_300.json")}
+        for path in files.values():
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{}")
+        stale = time.time() - 80 * 86400                               # 80일 동안 기록 없음
+        for name in ("history_gbis_1.json", "history_gbis_2.json.tmp", "osm_37.0_127.0_300.json"):
+            os.utime(files[name], (stale, stale))
+        self.poll("15:00")
+        with open(mine, encoding="utf-8") as f:                        # 이 정류장은 10주 넘은 날짜만 빠진다
+            self.assertEqual(sorted(json.load(f)["days"]), [ago(69), ago(1), self.DAY])
+        self.assertEqual(sorted(n for n in os.listdir(self.bus_dir)),   # 안 쓰는 정류장 기록만 지운다(지도 캐시는 그대로)
+                         ["history_gbis_204000158.json", "history_tago_25_X.json", "osm_37.0_127.0_300.json"])
+
+    def test_live_arrivals_are_recorded_and_recording_errors_never_break_them(self):
+        rows = {"response": {"msgHeader": {"resultCode": 0}, "msgBody": {"busArrivalList": [
+            {"routeId": 204000192, "routeName": 311, "predictTime1": 2, "predictTimeSec1": 95, "vehId1": 7001,
+             "locationNo1": 1, "predictTime2": ""}]}}}
+        with patch.object(bus, "_http_json", return_value=rows):
+            res = bus.arrivals(self.STOP, "k")
+        self.assertEqual(res["arrivals"], [{"no": "311", "id": "204000192", "sec": 95, "prev": 1, "veh": "7001"}])
+        self.assertEqual(bus._hist_pending["gbis_204000158"][0]["veh"], "7001")
+        with patch.object(bus, "_http_json", return_value=rows), \
+                patch.object(bus, "_hist_write", side_effect=OSError("disk full")):
+            self.assertEqual(bus.arrivals(self.STOP, "k")["status"], "ok")
 
 
 class TileTests(BusTestCase):

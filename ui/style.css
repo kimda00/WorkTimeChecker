@@ -1262,6 +1262,7 @@ html[data-theme="excel"] .busneed b { color: #b06000; }
 .busopt.picked .busopt-tag { color: var(--mint); }
 .busopt.early { opacity: .55; }
 .busopt.live .busopt-at { color: var(--mint); }       /* 실시간 도착 예정(시간표 추정 아님) */
+.busopt.hist .busopt-at, .busprevtimes b.hist { text-decoration: underline dotted; text-underline-offset: 3px; }   /* 지난 도착 기록 기준 */
 .busopt.hurry .busopt-tag { color: var(--red); }
 .busempty { padding: 14px 8px; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.5; }
 

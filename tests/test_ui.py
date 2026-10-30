@@ -303,6 +303,87 @@ class WorkTimeUI(unittest.TestCase):
         self.page.locator("#busTabLive").click()
         self.assertIn("실시간 도착을 볼 수 없어요", self.text("#busLiveList"))
 
+    def install_history_stop(self, days):
+        """경기도 정류장(노선 100: 06:00부터 10분 배차) + 평일 도착 기록(15:00~18:00 구간, 16:03 · 16:31 회차)을 저장한다."""
+        self.page.evaluate("""async days => {
+          window.pywebview = {api: {
+            save: async s => true,
+            bus_tile: async () => null,
+            bus_stop_routes: async () => ({status: 'ok', routes: [
+              {no: '100', id: 'R100', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
+            ]}),
+            bus_history: async () => ({status: 'ok', kinds: {wd: {days, cover: [[54000, 64800]], routes: {R100: [
+              {at: 57780, lo: 57660, hi: 57960, n: days}, {at: 59460, lo: 59340, hi: 59640, n: days}]}}}}),
+          }};
+          document.getElementById('busBtn').click();
+          await previewBusStop({id: 'gbis:1', stationId: '1', name: '텔레칩스', no: '05341', lat: 37.4, lng: 127.08, source: 'gbis'});
+          saveBusPreview();
+          await loadBusHistory();
+        }""", days)
+
+    def bus_times_between(self, start, end):
+        return self.page.evaluate(f"""busArrivalsOn(new Date()).filter(x => x.at >= {start} && x.at <= {end})
+                                      .map(x => [fmt24(x.at), !!x.hist])""")
+
+    def test_recorded_arrivals_replace_schedule_inside_recorded_hours(self):
+        for day in ("mon", "tue", "wed"):                             # 목요일 예상 퇴근 16:49
+            self.edit(day, "out", "16:49")
+        self.install_history_stop(3)
+        # 15:00~18:00 은 기록한 구간 — 10분 배차 대신 기록된 회차만, 그 밖은 시간표 그대로
+        self.assertEqual(self.bus_times_between(14 * 3600 + 40 * 60, 18 * 3600 + 20 * 60),
+                         [["14:40", False], ["14:50", False], ["16:03", True], ["16:31", True], ["18:10", False], ["18:20", False]])
+        self.assertIn("도착 기록 3일", self.text("#busSrc"))
+        row = self.page.locator("#busToday .busopt.hist").first
+        self.assertEqual(row.locator(".busopt-at").text_content(), "16:31")
+        self.assertIn("지난 기록 3일 · 빠름 16:29 · 늦음 16:34", row.get_attribute("title"))
+
+    def test_recorded_arrivals_wait_until_enough_days(self):
+        self.install_history_stop(2)
+        self.assertEqual(self.bus_times_between(15 * 3600, 15 * 3600 + 30 * 60),
+                         [["15:00", False], ["15:10", False], ["15:20", False], ["15:30", False]])
+        self.assertIn("도착 기록 모으는 중 2/3일", self.text("#busSrc"))
+
+    def test_background_recording_polls_only_around_expected_checkout(self):
+        for day in ("mon", "tue", "wed"):                             # 목요일 예상 퇴근 16:49
+            self.edit(day, "out", "16:49")
+        self.page.evaluate("""async () => {
+          window.arrivalCalls = 0;
+          window.pywebview = {api: {
+            save: async s => true,
+            bus_tile: async () => null,
+            bus_stop_routes: async () => ({status: 'ok', routes: [
+              {no: '100', id: 'R100', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'}]}),
+            bus_arrivals: async () => { window.arrivalCalls++; return {status: 'ok', arrivals: []}; },
+          }};
+          busDefaultKey = true;
+          document.getElementById('busBtn').click();
+          await previewBusStop({id: 'gbis:1', stationId: '1', name: '텔레칩스', no: '05341', lat: 37.4, lng: 127.08, source: 'gbis'});
+          saveBusPreview();
+          document.getElementById('workBtn').click();                 // 버스 화면을 떠난다
+        }""")
+        need = self.page.evaluate("(ti => busNeedSec(ti.mondayKey, ti.dayKey))(todayInfo())")
+        self.assertEqual(need, 16 * 3600 + 49 * 60)
+        kst = datetime.timezone(datetime.timedelta(hours=9))
+        at = lambda sec: datetime.datetime(2026, 10, 29, tzinfo=kst) + datetime.timedelta(seconds=sec)
+        calls = lambda: self.page.evaluate("arrivalCalls")
+        base = calls()
+        self.page.clock.run_for(61000)                                 # 버스 화면 밖 · 기록 시간 전: 부르지 않음
+        self.page.clock.set_system_time(at(need - 70 * 60))
+        self.page.clock.run_for(61000)
+        self.assertEqual(calls(), base)
+        self.page.clock.set_system_time(at(need - 50 * 60))           # 예상 퇴근 1시간 전부터 1분마다
+        self.page.clock.run_for(1500)
+        self.assertEqual(calls(), base + 1)
+        self.page.clock.run_for(60000)
+        self.assertEqual(calls(), base + 2)
+        # 1시간 30분 뒤엔 멈춘다 — 퇴근을 안 적어 예상 퇴근이 지금을 따라와도
+        self.page.clock.set_system_time(at(need + 100 * 60))
+        self.page.clock.run_for(122000)
+        self.assertEqual(calls(), base + 2)
+        self.edit("thu", "out", "18:40")                              # 퇴근을 적으면 그 시각 앞뒤로 다시 모은다
+        self.page.clock.run_for(61000)
+        self.assertGreater(calls(), base + 2)
+
     def test_bus_setup_survives_restart_and_uses_deploy_key(self):
         self.page.evaluate("""async () => {
           window.pywebview = {api: {

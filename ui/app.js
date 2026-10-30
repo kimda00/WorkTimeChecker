@@ -3,9 +3,10 @@
 const DAYS = [
   ['mon', '월'], ['tue', '화'], ['wed', '수'], ['thu', '목'], ['fri', '금'],
 ];
-const TYPES = ['', '연차', '오전반차', '오후반차', '휴일'];
-// TODO: '출장' 유형 검토(보류) — 근무시간이 사람마다 달라 하루 8h 초과도 가능.
-//   유력안: 출퇴근 자유 입력(EHR도 채움) + 비어 있으면 8h 인정. 확정 후 구현.
+// '출장' = 표시용 마커. 시간은 자유 입력(TTree/EHR도 채움)이고 근무 계산은 일반 근무와 동일.
+// '(무급)' 반차 = 표시만 다르고 계산은 일반 반차와 동일(4h 인정 = 주 40h 목표에서 그만큼 빠지는 것과 같은 산수).
+// '휴일'은 제거 — 진짜 공휴일은 holidayMap이 자동으로 빨간 표시 + 8h 인정하므로 불필요.
+const TYPES = ['', '연차', '오전반차', '오후반차', '오전반차(무급)', '오후반차(무급)', '출장'];
 
 let state = null;          // { settings, weeks: { 'YYYY-MM-DD(월요일)': { mon:{type,in,out}, ... } } }
 let weekOffset = 0;        // 0 = 이번 주
@@ -133,9 +134,12 @@ function weekData(mondayKey) {
 //  오전반차 = 오전 휴무 → 출근 13:00 고정 / 퇴근은 자유
 //  오후반차 = 오후 휴무 → 퇴근 13:00 고정 / 출근은 자유
 function halfdayFixed(type) {
-  if (type === '오전반차') return { field: 'in', value: '13:00' };
-  if (type === '오후반차') return { field: 'out', value: '13:00' };
+  if (type && type.indexOf('오전반차') === 0) return { field: 'in', value: '13:00' };
+  if (type && type.indexOf('오후반차') === 0) return { field: 'out', value: '13:00' };
   return null;
+}
+function isHalfday(type) {
+  return !!(type && (type.indexOf('오전반차') === 0 || type.indexOf('오후반차') === 0));
 }
 
 // 화면 표시용: 분 단위로 내림 ('07:43:27' → '07:43')
@@ -164,6 +168,11 @@ function normalizeStoredTimes() {
       if (!wk[key]) continue;
       wk[key].in = normalizeClockValue(wk[key].in);
       wk[key].out = normalizeClockValue(wk[key].out);
+      // 구버전 '휴일' 마이그레이션: 시간이 있으면 출장날 표시였을 것 → '출장',
+      // 없으면 8h 인정 유지를 위해 '연차'(진짜 공휴일이면 holidayMap이 어차피 우선).
+      if (wk[key].type === '휴일') {
+        wk[key].type = (wk[key].in || wk[key].out) ? '출장' : '연차';
+      }
       // 반차의 고정 경계(쉬는 쪽)만 강제. 일하는 쪽은 그대로 둠.
       const fx = halfdayFixed(wk[key].type);
       if (fx) wk[key][fx.field] = normalizeClockValue(fx.value);
@@ -242,9 +251,9 @@ function ecell(cell, dayStr) {
   return e;
 }
 
-// 반차 인정 시간(크레딧). 오전/오후 반차 = 4h 자동 인정.
+// 반차 인정 시간(크레딧). 오전/오후 반차(무급 포함) = 4h 자동 인정.
 function creditSec(cell, settings) {
-  return (cell.type === '오전반차' || cell.type === '오후반차') ? settings.halfTarget : 0;
+  return isHalfday(cell.type) ? settings.halfTarget : 0;
 }
 // 하루 근무 목표. 반차도 하루 목표는 8h (4h 인정 + 4h 실근무).
 function targetSec(cell, settings) {
@@ -315,7 +324,7 @@ function weeklySum(wk, s, mondayKey, now, mode) {
         : ((outS !== null) ? outS : now);              // 오늘
     } else {
       // 미래: 연차/반차/공휴일(확정)은 'now'에도 포함, 일반 근무 예정은 제외
-      const isLeave = (ec.type === '연차' || ec.type === '오전반차' || ec.type === '오후반차' || ec.type === '공휴일' || ec.type === '휴일');
+      const isLeave = (ec.type === '연차' || isHalfday(ec.type) || ec.type === '공휴일' || ec.type === '휴일');
       if (mode === 'now' && !isLeave) return;
       end = (outS !== null) ? outS : null;             // 연차/반차/공휴일 또는 예정: 입력된 것만
     }
@@ -519,7 +528,7 @@ function fillInputsFromState() {
 }
 
 function applyTypeClass(sel) {
-  sel.classList.remove('type-연차', 'type-오전반차', 'type-오후반차', 'type-휴일');
+  Array.from(sel.classList).forEach(cl => { if (cl.indexOf('type-') === 0) sel.classList.remove(cl); });
   if (sel.value) sel.classList.add('type-' + sel.value);
 }
 
@@ -767,19 +776,30 @@ function setView(mode) {
     wrap.classList.toggle('ttree-mode', mode === 'ttree');
     wrap.classList.toggle('approval-mode', mode === 'approval');
   }
-  for (const [view, id] of Object.entries({ work: 'workBtn', bus: 'busBtn', cal: 'calBtn', meal: 'mealBtn', ttree: 'ttreeBtn', approval: 'approvalBtn' })) {
-    const btn = document.getElementById(id);
-    btn.classList.toggle('active', view === mode);
-    if (view === mode) btn.setAttribute('aria-current', 'page');
-    else btn.removeAttribute('aria-current');
-  }
+  document.querySelectorAll('#sideNav .navitem').forEach(b => {
+    const on = b.dataset.view === mode;
+    b.classList.toggle('active', on);
+    if (on) b.setAttribute('aria-current', 'page');
+    else b.removeAttribute('aria-current');
+  });
 }
 
-function toggleMeal() {
-  setView('meal');
-  if (viewMode === 'meal' && !mealCacheLoaded) {
+// 사이드바 탭 선택. 화면 전환 + 각 화면의 최초 진입/재진입 훅을 여기서 처리한다.
+function selectView(mode) {
+  if (mode === viewMode) return;
+  setView(mode);
+  if (mode === 'meal' && !mealCacheLoaded) {
     mealCacheLoaded = true;
     loadMealCache();   // 저장된 게 있으면 즉시 표시 (네트워크 X)
+  } else if (mode === 'cal') {
+    enterCal();
+  } else if (mode === 'ttree') {
+    enterTtree();
+  } else if (mode === 'bus') {
+    enterBus();
+  } else if (mode === 'approval') {
+    if (!approvalInit) { approvalInit = true; initApprovalPanel(); }
+    refreshApprovalSheet();
   }
 }
 
@@ -1178,10 +1198,6 @@ function enterCal() {
   }
 }
 
-function toggleCal() {
-  setView('cal');
-  if (viewMode === 'cal') enterCal();
-}
 
 function calGoMonth(mm) {
   calMonth = mm;
@@ -1539,8 +1555,12 @@ function onBusOutsideClick(e) {
 }
 
 /* 버스 화면: 지도에서 정류장 고르기 + 오늘의 버스 */
+// 버스 화면 열기. 사이드바에서는 selectView('bus') → enterBus(), 그리드의 '퇴근 버스' 셀에서는 toggleBus().
 function toggleBus() {
   setView('bus');
+  enterBus();
+}
+function enterBus() {
   const b = busCfg();
   document.getElementById('busBuffer').value = b.bufferMin;
   renderBusSide();
@@ -2072,17 +2092,11 @@ function setTtreeBusy(busy) {
     if (el) el.disabled = busy;
   });
 }
-function setTtreeMode(on) {
-  setView(on ? 'ttree' : 'work');
-}
-async function toggleTtree() {
-  const opening = viewMode !== 'ttree';
-  setTtreeMode(true);
-  if (opening) {
-    setTtreeDefaults();
-    if (!ttreeLookupsLoaded) await loadTtreeLookups();
-    await loadTtreeStatus();
-  }
+// 휴가·출장 탭 진입 훅. 조회 함수들이 busy 가드를 공유하므로 순서대로 기다린다.
+async function enterTtree() {
+  setTtreeDefaults();
+  if (!ttreeLookupsLoaded) await loadTtreeLookups();
+  await loadTtreeStatus();
 }
 function todayYmdInput() { return ymd(new Date()); }
 function compactTimeForTtree(v) {
@@ -2136,11 +2150,16 @@ function populateTtreeLookups(res) {
   const cap = document.getElementById('ttreeCaption');
   if (cap && res.user) cap.textContent = (res.user.userName || res.user.userId || '') + ' · ' + (res.user.deptName || '');
   const classSel = document.getElementById('ttreeLeaveClass');
-  fillSelect(classSel, res.leaveClasses || [], 'code', 'name', '휴가 분류 선택');
+  // 대부분 '일반'(연차)에서 신청하므로 placeholder 없이 일반을 기본 선택
+  fillSelect(classSel, res.leaveClasses || [], 'code', 'name');
+  const generalCl = (res.leaveClasses || []).find(c => c.name === '일반');
+  if (classSel && generalCl) classSel.value = generalCl.code;
   updateTtreeLeaveTypes();
   const approvalSel = document.getElementById('ttreeApproval');
   fillSelect(approvalSel, res.approvals || [], 'id', 'name', '결재선 선택');
-  renderTtreeApprovalDetail();
+  ttreeBalance = res.leaveBalance || [];
+  autoSetTtreeApproval();
+  renderTtreeBalance();
   setTtreeDefaults();
   applyTtreeKind();
 }
@@ -2208,7 +2227,11 @@ function renderTtreeList(id, items, emptyText) {
     box.appendChild(empty);
     return;
   }
-  items.forEach(item => {
+  // TTree API 응답 순서가 뒤죽박죽이라 시작일(+시작시간) 최신순으로 정렬해서 보여준다
+  const sorted = items.slice().sort((a, b) =>
+    String(b.startDate || '').localeCompare(String(a.startDate || '')) ||
+    String(b.startTime || '').localeCompare(String(a.startTime || '')));
+  sorted.forEach(item => {
     const row = document.createElement('div');
     row.className = 'ttree-row';
     const main = document.createElement('div');
@@ -2226,6 +2249,69 @@ function renderTtreeList(id, items, emptyText) {
     box.appendChild(row);
   });
 }
+/* ---- TTree 신청 내역 → 근태 그리드 반영 ---- */
+// 0.5일 휴가는 시간대로 반차 방향 판별(오전에 쉬면 오전반차), 그 외 휴가는 연차.
+// 구분명에 '무급'이 들어가면 (무급) 반차로 표시 구분.
+function ttreeLeaveGridType(item) {
+  const dc = parseFloat(item.dayCount);
+  const st = parseTimeToSec(item.startTime);
+  const unpaid = String(item.title || '').indexOf('무급') !== -1;
+  if (dc === 0.5 && st !== null) {
+    const base = st < 12 * 3600 ? '오전반차' : '오후반차';
+    return unpaid ? base + '(무급)' : base;
+  }
+  return '연차';
+}
+// 반려(800)/취소(999)를 뺀 휴가·출장을 근태 주간 데이터에 채운다.
+//  - 휴가: 유형이 비어 있는 날만 설정 (사용자가 고른 유형은 유지)
+//  - 출장/교육: 출근·퇴근이 비어 있는 칸만 신청 시간으로 채움 (EHR 실측·직접 입력 우선)
+function applyTtreeToWorkGrid(res) {
+  if (!res || res.status !== 'ok') return;
+  const items = [];
+  (res.leave || []).forEach(it => items.push(Object.assign({ _kind: 'leave' }, it)));
+  (res.businessTrip || []).forEach(it => items.push(Object.assign({ _kind: 'bsrp' }, it)));
+  let changed = 0;
+  items.forEach(it => {
+    const code = String(it.statusCode || '');
+    if (code === '800' || code === '999') return;
+    if (!it.startDate) return;
+    const start = new Date(it.startDate + 'T00:00:00');
+    const end = new Date((it.endDate || it.startDate) + 'T00:00:00');
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const idx = (d.getDay() + 6) % 7;
+      if (idx > 4) continue;                       // 주말 제외
+      const dayStr = ymd(d);
+      if (holidayMap[dayStr]) continue;            // 공휴일은 이미 8h 인정
+      const wk = weekData(ymd(mondayOf(d)));
+      const c = wk[DAYS[idx][0]];
+      if (it._kind === 'leave') {
+        if (c.type) continue;
+        const t = ttreeLeaveGridType(it);
+        c.type = t;
+        const fx = halfdayFixed(t);
+        if (fx) c[fx.field] = normalizeClockValue(fx.value);
+        changed++;
+      } else {
+        if (c.type === '연차' || c.type === '휴일') continue;   // 종일 휴무로 지정된 날은 시간 채움 무의미
+        const inV = normalizeClockValue(it.startTime);
+        const outV = normalizeClockValue(it.endTime);
+        let touched = false;
+        if (!c.type) { c.type = '출장'; touched = true; }        // 출장 마커 표시 (사용자 지정 유형은 유지)
+        if (inV && parseTimeToSec(c.in) === null) { c.in = inV; touched = true; }
+        if (outV && parseTimeToSec(c.out) === null) { c.out = outV; touched = true; }
+        if (touched) changed++;
+      }
+    }
+  });
+  if (!changed) return;
+  scheduleSave();
+  fillInputsFromState();
+  recompute();
+  const status = document.getElementById('statusLine');
+  if (status) { status.className = 'status ok'; status.textContent = 'TTree 휴가·출장 ' + changed + '일 근태 반영'; }
+}
+
 async function loadTtreeStatus() {
   if (ttreeBusy) return;
   setTtreeBusy(true);
@@ -2239,6 +2325,8 @@ async function loadTtreeStatus() {
     renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
     renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
     renderTtreeList('ttreeOvertimeList', res.overtime || [], res.warnings?.length ? '연장근무 현황 조회 실패' : '조회된 연장근무 신청이 없습니다.');
+    if (res.leaveBalance) { ttreeBalance = res.leaveBalance; renderTtreeBalance(); }
+    applyTtreeToWorkGrid(res);
     const range = document.getElementById('ttreeStatusRange');
     if (range && res.range) range.textContent = res.range.begin + ' ~ ' + res.range.end;
     setTtreeMessage(res.warnings?.length ? res.warnings.join(' ') : 'TTree 신청 현황 조회 완료', res.warnings?.length ? 'err' : 'ok');
@@ -2252,22 +2340,65 @@ function updateTtreeLeaveTypes() {
   const classCode = document.getElementById('ttreeLeaveClass')?.value || '';
   const cl = ((ttreeLookups && ttreeLookups.leaveClasses) || []).find(x => x.code === classCode);
   fillSelect(document.getElementById('ttreeLeaveType'), cl ? cl.types : [], 'code', 'name', '휴가 구분 선택');
-  fixTtreeApprovalByLeaveType();
+  autoSetTtreeApproval();
+  renderTtreeBalance();
 }
-function fixTtreeApprovalByLeaveType() {
-  const typeSel = document.getElementById('ttreeLeaveType');
+// 결재선 자동 선택 — TTree와 동일한 규칙.
+// 휴가: 구분에 지정된 결재선(approvalLineName) → 없으면 선호 결재선 → 첫 항목.
+// 출장/교육: 구분별 매핑(교육은 2차 결재까지 필요) → 선호 결재선 → 첫 항목.
+// (백엔드 build_leave_payload 의 _select_approval_id 와 같은 우선순위)
+const TTREE_PREFERRED_LINES = ['차상위자', '차상위자 - 최고관리자'];
+const TTREE_BSRP_APPROVAL = { bsrp: ['차상위자'], edu: ['차상위자 - 최고관리자'] };
+function autoSetTtreeApproval() {
   const approvalSel = document.getElementById('ttreeApproval');
-  if (!typeSel || !approvalSel) return;
-  const opt = typeSel.options[typeSel.selectedIndex];
-  const name = opt && opt.dataset.approvalLineName;
-  if (!name) return;
-  for (const option of approvalSel.options) {
-    if (option.textContent === name) {
-      approvalSel.value = option.value;
-      break;
-    }
+  if (!approvalSel || !approvalSel.options.length) return;
+  const kind = document.getElementById('ttreeKind')?.value || 'leave';
+  let wantedNames = [];
+  if (kind === 'leave') {
+    const typeSel = document.getElementById('ttreeLeaveType');
+    const opt = typeSel && typeSel.options[typeSel.selectedIndex];
+    const name = (opt && opt.dataset.approvalLineName) || '';
+    if (name) wantedNames = [name];
+  } else {
+    const bsrpType = document.getElementById('ttreeBsrpType')?.value || 'bsrp';
+    wantedNames = TTREE_BSRP_APPROVAL[bsrpType] || [];
   }
+  const byName = name => Array.from(approvalSel.options).find(o => o.value && o.textContent === name);
+  let target = null;
+  for (const name of wantedNames.concat(TTREE_PREFERRED_LINES)) {
+    target = byName(name);
+    if (target) break;
+  }
+  if (!target) target = Array.from(approvalSel.options).find(o => o.value);
+  if (target) approvalSel.value = target.value;
   renderTtreeApprovalDetail();
+}
+/* ---- 잔여 휴가 표시 ---- */
+let ttreeBalance = [];
+function ttreeFmtDay(v) {
+  const n = Math.round(Number(v) * 100) / 100;
+  return isNaN(n) ? String(v) : String(n);
+}
+function ttreeClassName(code) {
+  const c = ((ttreeLookups && ttreeLookups.leaveClasses) || []).find(x => x.code === code);
+  return (c && c.name) || code;
+}
+function renderTtreeBalance() {
+  const el = document.getElementById('ttreeLeaveBalance');
+  if (el) {
+    const cls = document.getElementById('ttreeLeaveClass')?.value || '';
+    const row = ttreeBalance.find(b => b.classCode === cls) ||
+      (ttreeBalance.length === 1 ? ttreeBalance[0] : null);
+    el.textContent = row
+      ? '잔여 ' + ttreeFmtDay(row.remain) + '일 · 총 ' + ttreeFmtDay(row.total) + '일 중 ' + ttreeFmtDay(row.used) + '일 사용'
+      : '—';
+  }
+  const sum = document.getElementById('ttreeBalanceSummary');
+  if (sum) {
+    sum.textContent = ttreeBalance.length
+      ? ttreeBalance.map(b => ttreeClassName(b.classCode) + ' 잔여 ' + ttreeFmtDay(b.remain) + '일 (총 ' + ttreeFmtDay(b.total) + ' · 사용 ' + ttreeFmtDay(b.used) + ')').join('  ·  ')
+      : '';
+  }
 }
 function renderTtreeApprovalDetail() {
   const box = document.getElementById('ttreeApprovalDetail');
@@ -2288,29 +2419,35 @@ function applyTtreeKind() {
   const title = document.getElementById('ttreeTitle');
   if (leave) leave.hidden = kind !== 'leave';
   if (bsrp) bsrp.hidden = kind !== 'bsrp';
-  document.getElementById('ttreeOvertimeForm').hidden = kind !== 'overtime';
-  if (title) title.textContent = { leave: '휴가 신청', bsrp: '출장 신청', overtime: '연장근무 신청' }[kind];
+  const overtimeForm = document.getElementById('ttreeOvertimeForm');
+  if (overtimeForm) overtimeForm.hidden = kind !== 'overtime';
+  if (title) title.textContent = { leave: '휴가 신청', bsrp: '출장/교육 신청', overtime: '연장근무 신청' }[kind] || '휴가 신청';
+  // 결재선 목록: 연장근무는 TTree가 지정한 전용 결재선(고정이면 변경 불가), 그 외는 일반 결재선
   const approval = document.getElementById('ttreeApproval');
-  const previous = approval.value;
   const policy = ttreeLookups?.overtime;
-  fillSelect(approval, (kind === 'overtime' ? policy?.approvals : ttreeLookups?.approvals) || [], 'id', 'name', '결재선 선택');
-  approval.disabled = kind === 'overtime' && !!policy?.fixedApprovalId;
-  if ([...approval.options].some(x => x.value === previous)) approval.value = previous;
+  if (approval) {
+    const previous = approval.value;
+    fillSelect(approval, (kind === 'overtime' ? policy?.approvals : ttreeLookups?.approvals) || [], 'id', 'name', '결재선 선택');
+    approval.disabled = kind === 'overtime' && !!policy?.fixedApprovalId;
+    if ([...approval.options].some(x => x.value === previous)) approval.value = previous;
+  }
   if (kind === 'overtime') {
-    if (policy?.fixedApprovalId) approval.value = policy.fixedApprovalId;
+    if (approval && policy?.fixedApprovalId) approval.value = policy.fixedApprovalId;
     if (policy?.startDate) document.getElementById('ttreeOvertimeStart').value = policy.startDate;
     if (policy?.endDate) document.getElementById('ttreeOvertimeEnd').value = policy.endDate;
-    document.getElementById('ttreeOvertimeNote').textContent = policy?.enabled ? '이번 주 월~일 · 12시간 고정' + (policy.fixedApprovalId ? ' · 회사 지정 결재선' : '') : (policy?.message || '코드 새로고침으로 연장근무 설정을 불러와 주세요.');
+    document.getElementById('ttreeOvertimeNote').textContent = policy?.enabled ? '이번 주 월~일 · 12시간 고정' + (policy.fixedApprovalId ? ' · 회사 지정 결재선' : '') : (policy?.message || '폼 항목 갱신으로 연장근무 설정을 불러와 주세요.');
     document.getElementById('ttreeOvertimeRestartRow').hidden = !policy?.canRestart;
     if (!policy?.canRestart) document.getElementById('ttreeOvertimeRestart').checked = false;
-  } else if (kind === 'leave') fixTtreeApprovalByLeaveType();
-  renderTtreeApprovalDetail();
+    renderTtreeApprovalDetail();
+  } else {
+    autoSetTtreeApproval();
+  }
   document.getElementById('ttreeConfirm').checked = false;
   document.getElementById('ttreePreviewBox').textContent = '';
   applyTtreeBsrpRange();
 }
 function closeTtreePanel() {
-  setTtreeMode(false);
+  selectView('work');
 }
 function applyTtreeBsrpRange() {
   const range = document.getElementById('ttreeBsrpRange')?.value || 'DAY';
@@ -2414,9 +2551,9 @@ async function submitTtreeRequest() {
     return;
   }
   const kind = document.getElementById('ttreeKind')?.value || 'leave';
-  const label = { leave: '휴가', bsrp: '출장', overtime: '이번 주 12시간 연장근무' }[kind];
+  const label = { leave: '휴가', bsrp: '출장/교육', overtime: '이번 주 12시간 연장근무' }[kind] || '휴가';
   if (kind === 'overtime' && !ttreeLookups?.overtime?.enabled) {
-    setTtreeMessage(ttreeLookups?.overtime?.message || '코드 새로고침으로 연장근무 설정을 확인해 주세요.', 'err');
+    setTtreeMessage(ttreeLookups?.overtime?.message || '폼 항목 갱신으로 연장근무 설정을 확인해 주세요.', 'err');
     return;
   }
   const draft = currentTtreeDraft();
@@ -2495,16 +2632,33 @@ function rerenderWeek() {
 let approvalInit = false;
 let approvalPayday = null;
 let approvalPaySrc = '';
+let approvalProjectMatches = [];   // 마지막 '프로젝트 조회' 결과 [{code, name}]
 
-function setApprovalMode(on) {
-  setView(on ? 'approval' : 'work');
+// 기본 프로젝트 설정: 키워드(approvalProject)와, 조회로 확정한 코드/이름(approvalProjectCode/Name).
+// 키워드만 있으면 폼을 열 때 helper 가 검색해 유일/완전일치 결과만 쓴다.
+function approvalProjectSetting() {
+  const s = (state && state.settings) || {};
+  return { keyword: (s.approvalProject || '').trim(), code: s.approvalProjectCode || '', name: s.approvalProjectName || '' };
 }
-
-function toggleApproval() {
-  const opening = viewMode !== 'approval';
-  setApprovalMode(true);
-  if (opening && !approvalInit) { approvalInit = true; initApprovalPanel(); }
-  if (opening) refreshApprovalSheet();
+function setApprovalProjectPick(code, name) {
+  if (!state || !state.settings) return;
+  state.settings.approvalProjectCode = code || '';
+  state.settings.approvalProjectName = name || '';
+  scheduleSave();
+}
+function renderApprovalProjectPick(matches) {
+  const wrap = document.getElementById('apprProjectPickWrap');
+  const sel = document.getElementById('apprProjectPick');
+  if (!wrap || !sel) return;
+  sel.innerHTML = '';
+  if (!matches || matches.length < 2) { wrap.hidden = true; return; }
+  const cur = approvalProjectSetting().code;
+  const first = document.createElement('option'); first.value = ''; first.textContent = '프로젝트 선택'; sel.appendChild(first);
+  matches.forEach(m => {
+    const o = document.createElement('option'); o.value = m.code; o.textContent = m.code + ' ' + m.name; sel.appendChild(o);
+  });
+  sel.value = matches.some(m => m.code === cur) ? cur : '';
+  wrap.hidden = false;
 }
 
 function initApprovalPanel() {
@@ -2522,6 +2676,24 @@ function initApprovalPanel() {
     if (state && state.settings) { state.settings.approvalName = nameInp.value.trim(); scheduleSave(); }
     refreshApprovalSheet();
   });
+  const projInp = document.getElementById('apprProject');
+  if (projInp) {
+    projInp.value = approvalProjectSetting().keyword;
+    projInp.addEventListener('input', () => {
+      // 키워드가 바뀌면 이전에 확정한 프로젝트는 더 이상 믿을 수 없다.
+      if (state && state.settings) { state.settings.approvalProject = projInp.value.trim(); }
+      setApprovalProjectPick('', '');
+      approvalProjectMatches = [];
+      renderApprovalProjectPick([]);
+      refreshApprovalSheet();
+    });
+  }
+  const pick = document.getElementById('apprProjectPick');
+  if (pick) pick.addEventListener('change', () => {
+    const m = approvalProjectMatches.find(x => x.code === pick.value);
+    setApprovalProjectPick(m ? m.code : '', m ? m.name : '');
+    refreshApprovalSheet();
+  });
 }
 
 function apprTitleText(month, name) {
@@ -2535,6 +2707,14 @@ function refreshApprovalSheet() {
   document.getElementById('apprPayee').textContent = name || '—';
   document.getElementById('apprPayday').textContent = approvalPayday || '—';
   document.getElementById('apprPaySrc').textContent = approvalPaySrc || '';
+  const pj = approvalProjectSetting();
+  const pjText = document.getElementById('apprProjectText');
+  const pjSrc = document.getElementById('apprProjectSrc');
+  if (pjText && pjSrc) {
+    if (pj.code && pj.name) { pjText.textContent = pj.name; pjSrc.textContent = '(' + pj.code + ')'; }
+    else if (pj.keyword) { pjText.textContent = pj.keyword; pjSrc.textContent = '(미확정 — 폼을 열 때 검색해 유일한 결과만 적용)'; }
+    else { pjText.textContent = '—'; pjSrc.textContent = '(비우면 프로젝트는 채우지 않아요)'; }
+  }
 }
 
 function setApprMsg(msg, cls) {
@@ -2542,7 +2722,36 @@ function setApprMsg(msg, cls) {
   if (el) { el.textContent = msg || ''; el.className = 'mealcaption' + (cls ? ' ' + cls : ''); }
 }
 function setApprBusy(busy) {
-  ['apprLookup', 'apprOpen'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+  ['apprLookup', 'apprOpen', 'apprProjectLookup'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+}
+
+async function lookupApprovalProject() {
+  const keyword = (document.getElementById('apprProject').value || '').trim();
+  if (!keyword) { setApprMsg('프로젝트 이름(일부)이나 코드를 먼저 입력하세요.', 'err'); return; }
+  setApprBusy(true); setApprMsg('프로젝트 검색 중…');
+  let res = null;
+  try {
+    if (apiReady('approval_project')) res = await pywebview.api.approval_project(keyword);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err'); return; }
+  if (res.status !== 'ok') { setApprMsg('프로젝트 검색 실패: ' + (res.message || '알 수 없음'), 'err'); return; }
+  approvalProjectMatches = res.projects || [];
+  const exact = approvalProjectMatches.find(m => m.code === keyword || m.name === keyword);
+  const chosen = exact || (approvalProjectMatches.length === 1 ? approvalProjectMatches[0] : null);
+  if (chosen) {
+    setApprovalProjectPick(chosen.code, chosen.name);
+    setApprMsg('프로젝트 확정: ' + chosen.code, 'ok');
+  } else if (!approvalProjectMatches.length) {
+    setApprovalProjectPick('', '');
+    setApprMsg('‘' + keyword + '’ 프로젝트를 못 찾았어요.', 'err');
+  } else {
+    setApprovalProjectPick('', '');
+    setApprMsg(approvalProjectMatches.length + '건이 검색됐어요 — 목록에서 하나를 고르세요.');
+  }
+  renderApprovalProjectPick(approvalProjectMatches);
+  refreshApprovalSheet();
 }
 
 async function lookupApprovalPayday() {
@@ -2571,7 +2780,9 @@ async function openApprovalForm() {
   const month = parseInt(document.getElementById('apprMonth').value, 10);
   const name = (document.getElementById('apprName').value || '').trim();
   if (approvalPayday == null) await lookupApprovalPayday();   // 없으면 먼저 조회
-  const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '' };
+  const pj = approvalProjectSetting();
+  const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '',
+                    project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null };
   setApprBusy(true); setApprMsg('결재 폼 여는 중… 열린 창에서 검토·카드입력·제출하세요.');
   let res = null;
   try {
@@ -2600,8 +2811,8 @@ async function init() {
   document.getElementById('todayBtn').addEventListener('click', () => { weekOffset = 0; rerenderWeek(); });
   document.getElementById('ehrBtn').addEventListener('click', ehrButtonClick);
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
-  document.getElementById('workBtn').addEventListener('click', () => setView('work'));
-  document.getElementById('busBtn').addEventListener('click', toggleBus);
+  document.querySelectorAll('#sideNav .navitem').forEach(b =>
+    b.addEventListener('click', () => selectView(b.dataset.view)));
   document.getElementById('busSearchForm').addEventListener('submit', searchBusPlace);
   document.getElementById('busScan').addEventListener('click', scanBusStops);
   document.getElementById('busBuffer').addEventListener('change', onBusBufferChange);
@@ -2613,33 +2824,30 @@ async function init() {
   document.getElementById('busBuffer').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
   document.addEventListener('mousedown', onBusOutsideClick);
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeBusPicker(); document.getElementById('busPlaces').hidden = true; } });
-  document.getElementById('mealBtn').addEventListener('click', toggleMeal);
   document.getElementById('mealReload').addEventListener('click', reloadMeal);
   document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);
-  document.getElementById('calBtn').addEventListener('click', toggleCal);
   document.getElementById('calReload').addEventListener('click', fetchCal);
   document.getElementById('calPrev').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, -1)));
   document.getElementById('calNext').addEventListener('click', () => calGoMonth(calShiftMonth(calMonth, 1)));
   document.getElementById('calToday').addEventListener('click', () => calGoMonth(calCurrentMonth()));
-  document.getElementById('ttreeBtn').addEventListener('click', toggleTtree);
-  document.getElementById('ttreeClose').addEventListener('click', closeTtreePanel);
   document.getElementById('ttreeCancel').addEventListener('click', closeTtreePanel);
   document.getElementById('ttreeLogin').addEventListener('click', doTtreeLogin);
   document.getElementById('ttreeReload').addEventListener('click', loadTtreeStatus);
   document.getElementById('ttreeLookupReload').addEventListener('click', loadTtreeLookups);
   document.getElementById('ttreeKind').addEventListener('change', applyTtreeKind);
   document.getElementById('ttreeLeaveClass').addEventListener('change', updateTtreeLeaveTypes);
-  document.getElementById('ttreeLeaveType').addEventListener('change', fixTtreeApprovalByLeaveType);
+  document.getElementById('ttreeLeaveType').addEventListener('change', autoSetTtreeApproval);
   document.getElementById('ttreeLeaveRange').addEventListener('change', applyTtreeRangeTimes);
   document.getElementById('ttreeLeaveStart').addEventListener('change', applyTtreeRangeTimes);
+  document.getElementById('ttreeBsrpType').addEventListener('change', autoSetTtreeApproval);
   document.getElementById('ttreeBsrpRange').addEventListener('change', applyTtreeBsrpRange);
   document.getElementById('ttreeBsrpStart').addEventListener('change', applyTtreeBsrpRange);
   document.getElementById('ttreeApproval').addEventListener('change', renderTtreeApprovalDetail);
   document.getElementById('ttreePreview').addEventListener('click', previewTtreeRequest);
   document.getElementById('ttreeSubmit').addEventListener('click', submitTtreeRequest);
-  document.getElementById('approvalBtn').addEventListener('click', toggleApproval);
   document.getElementById('apprLookup').addEventListener('click', lookupApprovalPayday);
   document.getElementById('apprOpen').addEventListener('click', openApprovalForm);
+  document.getElementById('apprProjectLookup').addEventListener('click', lookupApprovalProject);
   document.getElementById('calSelAll').addEventListener('click', () => calSetAll(true));
   document.getElementById('calSelNone').addEventListener('click', () => calSetAll(false));
   bindFormulaBar();
@@ -2653,6 +2861,8 @@ async function init() {
 
   // 앱 켤 때 자동 EHR 조회
   refreshEhr(false);
+  // TTree 휴가·출장도 백그라운드로 한 번 조회해 근태에 반영 (로그인 안 돼 있으면 조용히 넘어감)
+  if (apiReady('ttree_status')) loadTtreeStatus();
   // TAGO 키(개인/배포 기본)가 있으면 실시간 도착으로 퇴근 버스 시간표를 한 번 보정(버스 화면을 안 열어도 그리드 추천에 반영)
   loadBusInfo().then(fetchBusLive);
   loadBusHistory();

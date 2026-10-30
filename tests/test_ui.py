@@ -104,15 +104,18 @@ class WorkTimeUI(unittest.TestCase):
         self.assertEqual(self.page.locator("#progressPlan").get_attribute("aria-valuenow"), "100")
         self.assertEqual(self.page.locator("#progressPlan").get_attribute("aria-valuetext"), "41:00 / 40:00")
 
+    def nav(self, view):
+        return self.page.locator(f'#sideNav .navitem[data-view="{view}"]')
+
     def test_navigation_has_stable_labels_and_a_dedicated_work_button(self):
-        for button, panel, label in (("busBtn", "busPanel", "버스"), ("calBtn", "calPanel", "캘린더"), ("mealBtn", "mealPanel", "식단"), ("ttreeBtn", "ttreePanel", "TTree"), ("approvalBtn", "approvalPanel", "결재")):
+        for view, panel, label in (("bus", "busPanel", "버스"), ("cal", "calPanel", "캘린더"), ("meal", "mealPanel", "식단"), ("ttree", "ttreePanel", "휴가·출장"), ("approval", "approvalPanel", "결재")):
             for _ in range(2):
-                self.page.locator("#" + button).click()
+                self.nav(view).click()
                 self.assertTrue(self.page.locator("#" + panel).is_visible())
-                self.assertEqual(self.text("#" + button), label)
-                self.assertEqual(self.page.locator("#" + button).get_attribute("aria-current"), "page")
-                self.assertEqual(self.page.locator('.viewbtn[aria-current="page"]').count(), 1)
-            self.page.locator("#workBtn").click()
+                self.assertEqual(self.nav(view).text_content().strip(), label)
+                self.assertEqual(self.nav(view).get_attribute("aria-current"), "page")
+                self.assertEqual(self.page.locator('#sideNav .navitem[aria-current="page"]').count(), 1)
+            self.nav("work").click()
             self.assertTrue(self.page.locator("#grid").is_visible())
             self.assertFalse(self.page.locator("#" + panel).is_visible())
 
@@ -127,7 +130,7 @@ class WorkTimeUI(unittest.TestCase):
               {no: '200', first: '06:05', last: '22:00', iv: {wd: 30}, offset: 0, source: 'demo'},
             ]}),
           }};
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'osm:1', name: '테스트정류장', no: '07073', lat: 37.39, lng: 127.11, routes: ['100', '200'], source: 'osm'});
         }""")
         if save:
@@ -183,7 +186,7 @@ class WorkTimeUI(unittest.TestCase):
             self.edit(day, "out", "16:49")
         self.assertTrue(self.page.locator("#rowBus").is_hidden())
         self.install_bus_stop()
-        self.page.locator("#workBtn").click()
+        self.nav("work").click()
         bus_cell = lambda day: self.page.locator(f'#rowBus .buscell[data-day="{day}"]')
         self.assertTrue(self.page.locator("#rowBus").is_visible())
         self.assertEqual(self.text('#rowEstOut td[data-day="thu"]'), "16:49")
@@ -240,7 +243,7 @@ class WorkTimeUI(unittest.TestCase):
           }};
           busDefaultKey = true;          // config.json 키가 있는 상태
           state.weeks['2026-10-26'].fri.bus = {route: '100', at: '17:00'};
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'tago:31020:N1', nodeId: 'N1', cityCode: '31020', name: '판교역', no: '7073',
                                lat: 37.39, lng: 127.11, routes: [], source: 'tago'});
           saveBusPreview();
@@ -275,7 +278,7 @@ class WorkTimeUI(unittest.TestCase):
             ]}),
           }};
           busDefaultKey = true;
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'gbis:204000158', stationId: '204000158', name: '텔레칩스', no: '05341',
                                 lat: 37.40645, lng: 127.0873667, source: 'gbis'});
           busPreview.take.delete('310');          // 310번은 탈 버스에서 뺀다
@@ -296,7 +299,7 @@ class WorkTimeUI(unittest.TestCase):
         self.assertTrue(self.page.locator("#busLivePane").is_hidden())
 
     def test_live_tab_explains_when_stop_has_no_live_arrivals(self):
-        self.page.locator("#busBtn").click()
+        self.nav("bus").click()
         self.page.locator("#busTabLive").click()
         self.assertIn("저장된 퇴근 정류장이 없어요", self.text("#busLiveList"))
         self.install_bus_stop()                                       # OSM 정류장: 실시간 미지원
@@ -399,7 +402,7 @@ class WorkTimeUI(unittest.TestCase):
             ]}),
           }};
           await loadBusInfo();
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           busMap.setView([37.395, 127.111], 16);
           await scanBusStops();
           await previewBusStop(busStops[0]);
@@ -415,7 +418,7 @@ class WorkTimeUI(unittest.TestCase):
         again.goto((ROOT / "ui/index.html").as_uri())
         again.locator('#rowBus .buscell[data-day="fri"]').wait_for()
         self.assertTrue(again.locator("#rowBus").is_visible())
-        again.locator("#busBtn").click()
+        again.locator('#sideNav .navitem[data-view="bus"]').click()
         self.assertIn("판교역북편", again.locator("#busStopEdit").text_content())
         again.locator("#busStopEdit").click()
         self.assertEqual(again.locator("#busPrevRoutes .busprevroute").count(), 1)
@@ -432,7 +435,7 @@ class WorkTimeUI(unittest.TestCase):
               {no: '310', id: '233000031', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
             ]}),
           }};
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'gbis:204000158', stationId: '204000158', name: '텔레칩스', no: '05341',
                                 lat: 37.40645, lng: 127.0873667, source: 'gbis'});
           saveBusPreview();
@@ -475,7 +478,7 @@ class WorkTimeUI(unittest.TestCase):
                 self.page.set_viewport_size({"width": width, "height": 530})
                 for view in ("work", "bus", "cal", "meal", "ttree", "approval"):
                     self.page.evaluate("view => setView(view)", view)
-                    self.assertTrue(self.page.locator("#workBtn").is_visible())
+                    self.assertTrue(self.nav("work").is_visible())
                     self.assertTrue(self.page.evaluate("document.documentElement.scrollWidth <= innerWidth"), (theme, width, view))
 
     def test_overtime_form_preview_confirmation_and_history(self):
@@ -500,7 +503,8 @@ class WorkTimeUI(unittest.TestCase):
               return {status: 'ok', summary: '이번 주 연장근무 12시간 신청 완료'}; }
           }};
         }""")
-        self.page.locator('#ttreeBtn').click()
+        self.nav('ttree').click()
+        self.page.wait_for_function("ttreeCalls.length >= 2")
         self.assertEqual(self.page.evaluate('ttreeCalls'), ['lookups', 'status'])
         self.page.locator('#ttreeKind').select_option('overtime')
         self.assertTrue(self.page.locator('#ttreeApproval').is_disabled())
@@ -536,6 +540,46 @@ class WorkTimeUI(unittest.TestCase):
         self.page.locator('#ttreeKind').select_option('leave')
         self.assertFalse(self.page.locator('#ttreeApproval').is_disabled())
         self.assertTrue(self.page.locator('#ttreeOvertimeForm').is_hidden())
+
+    def test_approval_base_project_is_resolved_saved_and_sent_with_prefill(self):
+        self.page.evaluate("""() => {
+          window.apprCalls = [];
+          const a = {code: '서-2606-013', name: '[그룹사] 디지털트윈 과제'};
+          const b = {code: '로-2601-01', name: '디지털트윈 시뮬레이션 구축'};
+          window.pywebview = {api: {
+            save: async s => { window.savedSettings = s.settings; },
+            approval_project: async kw => { apprCalls.push(['project', kw]); return {status: 'ok', projects: kw === '서-2606-013' ? [a] : [a, b]}; },
+            approval_payday: async m => { apprCalls.push(['payday', m]); return {status: 'ok', payday: '2026-11-23', sourceTitle: '11월 지급일정'}; },
+            approval_prefill: async p => { apprCalls.push(['prefill', p]); return {status: 'started'}; }
+          }};
+        }""")
+        self.nav('approval').click()
+        self.assertEqual(self.text('#apprProjectText'), '—')
+        # 키워드가 여러 건에 걸리면 목록에서 고른다.
+        self.page.locator('#apprProject').fill('디지털트윈')
+        self.page.locator('#apprProjectLookup').click()
+        self.page.wait_for_function("apprCalls.length >= 1")
+        self.assertTrue(self.page.locator('#apprProjectPickWrap').is_visible())
+        self.assertEqual(self.text('#apprProjectText'), '디지털트윈')
+        self.page.locator('#apprProjectPick').select_option('로-2601-01')
+        self.assertEqual(self.text('#apprProjectText'), '디지털트윈 시뮬레이션 구축')
+        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalProjectCode === '로-2601-01'")
+        # 코드 완전일치는 바로 확정되고 목록은 숨긴다.
+        self.page.locator('#apprProject').fill('서-2606-013')
+        self.assertEqual(self.text('#apprProjectText'), '서-2606-013')
+        self.page.locator('#apprProjectLookup').click()
+        self.page.wait_for_function("apprCalls.length >= 2")
+        self.assertTrue(self.page.locator('#apprProjectPickWrap').is_hidden())
+        self.assertEqual(self.text('#apprProjectText'), '[그룹사] 디지털트윈 과제')
+        self.assertEqual(self.text('#apprProjectSrc'), '(서-2606-013)')
+        # 폼 열기 payload 에 확정한 프로젝트가 실린다.
+        self.page.locator('#apprName').fill('김다영')
+        self.page.locator('#apprOpen').click()
+        self.page.wait_for_function("apprCalls.some(c => c[0] === 'prefill')")
+        sent = self.page.evaluate("apprCalls.find(c => c[0] === 'prefill')[1]")
+        self.assertEqual(sent['payee'], '김다영')
+        self.assertEqual(sent['payday'], '2026-11-23')
+        self.assertEqual(sent['project'], {'code': '서-2606-013', 'name': '[그룹사] 디지털트윈 과제', 'keyword': '서-2606-013'})
 
 
 if __name__ == "__main__":

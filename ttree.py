@@ -72,6 +72,8 @@ JSON_HEADERS = dict(HEADERS, **{"Content-Type": "application/json;charset=UTF-8"
 FORM_HEADERS = dict(HEADERS, **{"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
 LAUNCH_ARGS = ["--disable-blink-features=AutomationControlled"]
 _CHANNELS = ["chrome", "msedge", None]
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
 
 def _launch(p, headless):
@@ -139,17 +141,22 @@ def _json_response(resp):
             return {}
 
 
+def _req(ctx):
+    # BrowserContext(헤드풀 로그인)면 .request, APIRequestContext(헤드리스 조회)면 자기 자신
+    return getattr(ctx, "request", ctx)
+
+
 def _get(ctx, path, params=None):
-    return ctx.request.get(ORIGIN + path, params=params or {}, headers=HEADERS)
+    return _req(ctx).get(ORIGIN + path, params=params or {}, headers=HEADERS)
 
 
 def _post_json(ctx, path, data):
-    return ctx.request.post(ORIGIN + path, data=json.dumps(data or {}, ensure_ascii=False), headers=JSON_HEADERS)
+    return _req(ctx).post(ORIGIN + path, data=json.dumps(data or {}, ensure_ascii=False), headers=JSON_HEADERS)
 
 
 def _post_form(ctx, path, data):
     encoded = urlencode(data or {})
-    return ctx.request.post(ORIGIN + path, data=encoded, headers=FORM_HEADERS)
+    return _req(ctx).post(ORIGIN + path, data=encoded, headers=FORM_HEADERS)
 
 
 def _current_user(ctx):
@@ -280,9 +287,32 @@ def _electron_cookies_for_origin():
     return cookies
 
 
+def _cookies_storage_state(cookies):
+    """add_cookies 형식의 쿠키를 storage_state dict 로 변환 (필수 필드 기본값 보강)."""
+    out = []
+    for c in cookies or []:
+        item = dict(c)
+        item.setdefault("expires", -1)
+        item.setdefault("sameSite", "Lax")
+        out.append(item)
+    return {"cookies": out, "origins": []}
+
+
 def _with_context(headless=True, prefer_electron=False):
     from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
+    if headless:
+        # 조회는 전부 순수 HTTP 라 브라우저를 띄우지 않는다
+        # (실제 Chrome 새 헤드리스가 창을 잠깐 깜빡이는 문제 + 기동 속도 개선)
+        req_kwargs = {"user_agent": BROWSER_UA}   # 기본 UA(Playwright/x.x)는 서버가 튕길 수 있다
+        if os.path.exists(STATE) and not prefer_electron:
+            req_kwargs["storage_state"] = STATE
+        else:
+            cookies = _electron_cookies_for_origin()
+            if cookies:
+                req_kwargs["storage_state"] = _cookies_storage_state(cookies)
+        ctx = p.request.new_context(**req_kwargs)
+        return p, None, ctx
     browser = _launch(p, headless=headless)
     kwargs = {}
     if os.path.exists(STATE) and not prefer_electron:
@@ -308,7 +338,8 @@ def _close(p, browser, ctx, save=True):
     except Exception:
         pass
     try:
-        browser.close()
+        if browser:
+            browser.close()
     except Exception:
         pass
     try:
@@ -404,12 +435,18 @@ def _normalize_leave(item):
     }
 
 
+_BSRP_TYPE_NAMES = {"bsrp": "출장", "edu": "교육"}
+
+
 def _normalize_bsrp(item):
     code = item.get("confmCd") or item.get("bsrpConfmCd") or item.get("workModConfmCd") or ""
+    # API가 이름(bsrpTypeNm) 없이 타입 코드("bsrp"/"edu")만 주는 경우가 있어 한글로 매핑한다
+    raw_type = item.get("bsrpType") or ""
+    type_name = item.get("bsrpTypeNm") or _BSRP_TYPE_NAMES.get(raw_type, raw_type)
     return {
         "kind": "businessTrip",
         "id": item.get("confmId") or item.get("bsrpSeq") or "",
-        "title": item.get("bsrpTypeNm") or item.get("bsrpType") or "출장",
+        "title": type_name or "출장",
         "startDate": _iso_date(item.get("bsrpBgnDe") or item.get("workBgnDe") or item.get("searchBgnDe")),
         "endDate": _iso_date(item.get("bsrpEndDe") or item.get("workEndDe") or item.get("searchEndDe")),
         "startTime": _hhmm(item.get("bsrpBgnTime") or item.get("workBgnTime")),
@@ -452,7 +489,9 @@ def fetch_status(days_before=90, days_after=90):
         except Exception:
             overtime = []
             warnings.append("연장근무 현황을 불러오지 못했습니다. 다시 조회해 주세요.")
-        return {"status": "ok", "user": user, "range": {"begin": begin, "end": end}, "leave": leave, "businessTrip": bsrp, "overtime": overtime, "warnings": warnings}
+        return {"status": "ok", "user": user, "range": {"begin": begin, "end": end},
+                "leave": leave, "businessTrip": bsrp, "overtime": overtime, "warnings": warnings,
+                "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 
@@ -503,6 +542,27 @@ def _select_approval_id(lines, requested_id="", requested_name=""):
     return lines[0].get("id") if lines else ""
 
 
+def _leave_balance(ctx):
+    """휴가 분류별 잔여 일수. [{classCode, total, used, remain}] — 실패 시 빈 리스트."""
+    try:
+        r = _post_json(ctx, "/vcatn/usedaylist/get", {})
+        if not r.ok:
+            return []
+        out = []
+        for row in _json_response(r).get("vcatnUseDayInfoList") or []:
+            total = float(row.get("vcatnDaycnt") or 0)
+            used = float(row.get("sumVcatnDayCnt") or 0)
+            out.append({
+                "classCode": row.get("vcatnClCd") or "",
+                "total": total,
+                "used": used,
+                "remain": round(total - used, 2),
+            })
+        return out
+    except Exception:
+        return []
+
+
 def fetch_lookups():
     p, browser, ctx, user, err = _session_context()
     if err:
@@ -538,7 +598,8 @@ def fetch_lookups():
             overtime.pop("workTimeId", None)
         except Exception as e:
             overtime = {"enabled": False, "message": str(e), "approvals": []}
-        return {"status": "ok", "user": user, "leaveClasses": classes, "approvals": approvals, "preset": preset, "overtime": overtime}
+        return {"status": "ok", "user": user, "leaveClasses": classes, "approvals": approvals,
+                "preset": preset, "overtime": overtime, "leaveBalance": _leave_balance(ctx)}
     finally:
         _close(p, browser, ctx)
 

@@ -202,7 +202,8 @@ def _run_ttree(cmd, timeout, payload=None):
 
 def _run_approval(cmd, timeout, payload=None):
     """전자결재 도우미(approval.py) 작업을 별도 프로세스로 실행. payload 는 stdin(dev)/임시파일(frozen)로 전달."""
-    flag_map = {"paydayjson": "--approval-payday", "prefilljson": "--approval-prefill"}
+    flag_map = {"paydayjson": "--approval-payday", "prefilljson": "--approval-prefill",
+                "projectjson": "--approval-project"}
     flag = flag_map.get(cmd)
     if getattr(sys, "frozen", False):
         import tempfile
@@ -494,8 +495,12 @@ class Api:
         return _run_approval("paydayjson", timeout=150, payload={"month": month})
 
     def approval_prefill(self, data):
-        """결재 폼을 헤드풀로 열고 텍스트 필드 자동채움. 메인 UI는 기다리지 않는다."""
+        """결재 폼을 헤드풀로 열고 텍스트 필드·프로젝트 자동채움. 메인 UI는 기다리지 않는다."""
         return _run_approval_prefill_background(data or {})
+
+    def approval_project(self, keyword):
+        """'기본 프로젝트' 설정용 프로젝트 검색(읽기, 별도 프로세스). {status, projects:[{code,name}]}"""
+        return _run_approval("projectjson", timeout=90, payload={"keyword": keyword or ""})
 
     def holidays(self, years):
         """한국 공휴일(대체공휴일 포함). 반환: {'YYYY-MM-DD': '이름', ...}"""
@@ -729,7 +734,7 @@ def main():
 
 def _maybe_run_ehr_mode():
     """exe(frozen)에서 _run_pw 가 자기 자신을 재실행한 경우: GUI 대신 작업 수행 후 종료."""
-    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--ttree-login", "--ttree-status", "--ttree-lookups", "--ttree-submit-leave", "--ttree-submit-bsrp", "--ttree-submit-overtime", "--approval-payday", "--approval-prefill", "--approval-prefill-bg"):
+    if getattr(sys, "frozen", False) and len(sys.argv) >= 3 and sys.argv[1] in ("--ehr-fetch", "--ehr-login", "--meal-fetch", "--ttree-login", "--ttree-status", "--ttree-lookups", "--ttree-submit-leave", "--ttree-submit-bsrp", "--ttree-submit-overtime", "--approval-payday", "--approval-prefill", "--approval-prefill-bg", "--approval-project"):
         if sys.argv[1] == "--approval-prefill-bg":
             import approval
             payload = {}
@@ -758,6 +763,8 @@ def _maybe_run_ehr_mode():
                     payload = {}
             if sys.argv[1] == "--approval-payday":
                 res = approval.fetch_payday(int(payload.get("month") or 1))
+            elif sys.argv[1] == "--approval-project":
+                res = approval.search_projects(payload.get("keyword") or "")
             else:
                 res = approval.prefill(payload)
         elif sys.argv[1].startswith("--ttree"):

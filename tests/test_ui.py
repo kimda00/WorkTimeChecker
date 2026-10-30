@@ -460,6 +460,46 @@ class WorkTimeUI(unittest.TestCase):
         self.assertFalse(self.page.locator('#ttreeApproval').is_disabled())
         self.assertTrue(self.page.locator('#ttreeOvertimeForm').is_hidden())
 
+    def test_approval_base_project_is_resolved_saved_and_sent_with_prefill(self):
+        self.page.evaluate("""() => {
+          window.apprCalls = [];
+          const a = {code: '서-2606-013', name: '[그룹사] 디지털트윈 과제'};
+          const b = {code: '로-2601-01', name: '디지털트윈 시뮬레이션 구축'};
+          window.pywebview = {api: {
+            save: async s => { window.savedSettings = s.settings; },
+            approval_project: async kw => { apprCalls.push(['project', kw]); return {status: 'ok', projects: kw === '서-2606-013' ? [a] : [a, b]}; },
+            approval_payday: async m => { apprCalls.push(['payday', m]); return {status: 'ok', payday: '2026-11-23', sourceTitle: '11월 지급일정'}; },
+            approval_prefill: async p => { apprCalls.push(['prefill', p]); return {status: 'started'}; }
+          }};
+        }""")
+        self.nav('approval').click()
+        self.assertEqual(self.text('#apprProjectText'), '—')
+        # 키워드가 여러 건에 걸리면 목록에서 고른다.
+        self.page.locator('#apprProject').fill('디지털트윈')
+        self.page.locator('#apprProjectLookup').click()
+        self.page.wait_for_function("apprCalls.length >= 1")
+        self.assertTrue(self.page.locator('#apprProjectPickWrap').is_visible())
+        self.assertEqual(self.text('#apprProjectText'), '디지털트윈')
+        self.page.locator('#apprProjectPick').select_option('로-2601-01')
+        self.assertEqual(self.text('#apprProjectText'), '디지털트윈 시뮬레이션 구축')
+        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalProjectCode === '로-2601-01'")
+        # 코드 완전일치는 바로 확정되고 목록은 숨긴다.
+        self.page.locator('#apprProject').fill('서-2606-013')
+        self.assertEqual(self.text('#apprProjectText'), '서-2606-013')
+        self.page.locator('#apprProjectLookup').click()
+        self.page.wait_for_function("apprCalls.length >= 2")
+        self.assertTrue(self.page.locator('#apprProjectPickWrap').is_hidden())
+        self.assertEqual(self.text('#apprProjectText'), '[그룹사] 디지털트윈 과제')
+        self.assertEqual(self.text('#apprProjectSrc'), '(서-2606-013)')
+        # 폼 열기 payload 에 확정한 프로젝트가 실린다.
+        self.page.locator('#apprName').fill('김다영')
+        self.page.locator('#apprOpen').click()
+        self.page.wait_for_function("apprCalls.some(c => c[0] === 'prefill')")
+        sent = self.page.evaluate("apprCalls.find(c => c[0] === 'prefill')[1]")
+        self.assertEqual(sent['payee'], '김다영')
+        self.assertEqual(sent['payday'], '2026-11-23')
+        self.assertEqual(sent['project'], {'code': '서-2606-013', 'name': '[그룹사] 디지털트윈 과제', 'keyword': '서-2606-013'})
+
 
 if __name__ == "__main__":
     unittest.main()

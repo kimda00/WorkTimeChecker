@@ -322,12 +322,18 @@
           <label>이름(지급처)<input id="apprName" class="ttree-input" placeholder="본인 이름" /></label>
           <button id="apprLookup" class="themebtn" title="재무톡톡 게시판에서 지급예정일 파싱">지급일 조회</button>
         </div>
+        <div class="apprrow apprrow-project">
+          <label class="apprgrow">기본 프로젝트<input id="apprProject" class="ttree-input" placeholder="프로젝트명 일부 또는 코드 (예: 디지털트윈)" /></label>
+          <button id="apprProjectLookup" class="themebtn" title="그룹웨어에서 프로젝트를 검색해 확정">프로젝트 조회</button>
+          <label id="apprProjectPickWrap" class="apprgrow" hidden>검색 결과에서 선택<select id="apprProjectPick" class="ttree-select"></select></label>
+        </div>
         <div class="apprsheet">
           <div class="apprfield"><span>제목</span><code id="apprTitle">—</code></div>
           <div class="apprfield"><span>지급처</span><code id="apprPayee">—</code></div>
           <div class="apprfield"><span>지급요청일</span><code id="apprPayday">—</code> <small id="apprPaySrc" class="mealcaption"></small></div>
+          <div class="apprfield"><span>프로젝트</span><code id="apprProjectText">—</code> <small id="apprProjectSrc" class="mealcaption"></small></div>
         </div>
-        <div class="apprnote">텍스트 필드(제목·지급처·지급요청일)만 자동 채워집니다. <b>카드내역·검토·제출은 열린 결재 창에서 직접</b> 하세요.</div>
+        <div class="apprnote">제목·지급처·지급요청일과 전표 각 행의 <b>프로젝트</b>가 자동으로 채워집니다. 카드내역으로 행을 추가해도 창이 열려 있는 동안 빈 프로젝트 칸을 이어서 채워요. <b>카드내역·검토·제출은 열린 결재 창에서 직접</b> 하세요.</div>
         <div class="appractions">
           <button id="apprOpen" class="ehrbtn" title="EHR 세션으로 결재 폼을 열고 자동채움">폼 열고 자동채움</button>
         </div>

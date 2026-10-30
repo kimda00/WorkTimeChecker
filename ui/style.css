@@ -1172,6 +1172,8 @@ html[data-theme="excel"] .ttree-badge.deny { color: #d93025; background: rgba(21
 }
 .apprrow { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 .apprrow label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); font-weight: 700; }
+.apprrow label.apprgrow { flex: 1 1 240px; min-width: 200px; }
+.apprrow label[hidden] { display: none; }
 .apprsheet {
   display: grid; gap: 8px; padding: 10px 12px; margin-bottom: 10px;
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);

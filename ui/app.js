@@ -2558,7 +2558,34 @@ function rerenderWeek() {
 let approvalInit = false;
 let approvalPayday = null;
 let approvalPaySrc = '';
+let approvalProjectMatches = [];   // 마지막 '프로젝트 조회' 결과 [{code, name}]
 
+// 기본 프로젝트 설정: 키워드(approvalProject)와, 조회로 확정한 코드/이름(approvalProjectCode/Name).
+// 키워드만 있으면 폼을 열 때 helper 가 검색해 유일/완전일치 결과만 쓴다.
+function approvalProjectSetting() {
+  const s = (state && state.settings) || {};
+  return { keyword: (s.approvalProject || '').trim(), code: s.approvalProjectCode || '', name: s.approvalProjectName || '' };
+}
+function setApprovalProjectPick(code, name) {
+  if (!state || !state.settings) return;
+  state.settings.approvalProjectCode = code || '';
+  state.settings.approvalProjectName = name || '';
+  scheduleSave();
+}
+function renderApprovalProjectPick(matches) {
+  const wrap = document.getElementById('apprProjectPickWrap');
+  const sel = document.getElementById('apprProjectPick');
+  if (!wrap || !sel) return;
+  sel.innerHTML = '';
+  if (!matches || matches.length < 2) { wrap.hidden = true; return; }
+  const cur = approvalProjectSetting().code;
+  const first = document.createElement('option'); first.value = ''; first.textContent = '프로젝트 선택'; sel.appendChild(first);
+  matches.forEach(m => {
+    const o = document.createElement('option'); o.value = m.code; o.textContent = m.code + ' ' + m.name; sel.appendChild(o);
+  });
+  sel.value = matches.some(m => m.code === cur) ? cur : '';
+  wrap.hidden = false;
+}
 
 function initApprovalPanel() {
   const sel = document.getElementById('apprMonth');
@@ -2575,6 +2602,24 @@ function initApprovalPanel() {
     if (state && state.settings) { state.settings.approvalName = nameInp.value.trim(); scheduleSave(); }
     refreshApprovalSheet();
   });
+  const projInp = document.getElementById('apprProject');
+  if (projInp) {
+    projInp.value = approvalProjectSetting().keyword;
+    projInp.addEventListener('input', () => {
+      // 키워드가 바뀌면 이전에 확정한 프로젝트는 더 이상 믿을 수 없다.
+      if (state && state.settings) { state.settings.approvalProject = projInp.value.trim(); }
+      setApprovalProjectPick('', '');
+      approvalProjectMatches = [];
+      renderApprovalProjectPick([]);
+      refreshApprovalSheet();
+    });
+  }
+  const pick = document.getElementById('apprProjectPick');
+  if (pick) pick.addEventListener('change', () => {
+    const m = approvalProjectMatches.find(x => x.code === pick.value);
+    setApprovalProjectPick(m ? m.code : '', m ? m.name : '');
+    refreshApprovalSheet();
+  });
 }
 
 function apprTitleText(month, name) {
@@ -2588,6 +2633,14 @@ function refreshApprovalSheet() {
   document.getElementById('apprPayee').textContent = name || '—';
   document.getElementById('apprPayday').textContent = approvalPayday || '—';
   document.getElementById('apprPaySrc').textContent = approvalPaySrc || '';
+  const pj = approvalProjectSetting();
+  const pjText = document.getElementById('apprProjectText');
+  const pjSrc = document.getElementById('apprProjectSrc');
+  if (pjText && pjSrc) {
+    if (pj.code && pj.name) { pjText.textContent = pj.name; pjSrc.textContent = '(' + pj.code + ')'; }
+    else if (pj.keyword) { pjText.textContent = pj.keyword; pjSrc.textContent = '(미확정 — 폼을 열 때 검색해 유일한 결과만 적용)'; }
+    else { pjText.textContent = '—'; pjSrc.textContent = '(비우면 프로젝트는 채우지 않아요)'; }
+  }
 }
 
 function setApprMsg(msg, cls) {
@@ -2595,7 +2648,36 @@ function setApprMsg(msg, cls) {
   if (el) { el.textContent = msg || ''; el.className = 'mealcaption' + (cls ? ' ' + cls : ''); }
 }
 function setApprBusy(busy) {
-  ['apprLookup', 'apprOpen'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+  ['apprLookup', 'apprOpen', 'apprProjectLookup'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+}
+
+async function lookupApprovalProject() {
+  const keyword = (document.getElementById('apprProject').value || '').trim();
+  if (!keyword) { setApprMsg('프로젝트 이름(일부)이나 코드를 먼저 입력하세요.', 'err'); return; }
+  setApprBusy(true); setApprMsg('프로젝트 검색 중…');
+  let res = null;
+  try {
+    if (apiReady('approval_project')) res = await pywebview.api.approval_project(keyword);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err'); return; }
+  if (res.status !== 'ok') { setApprMsg('프로젝트 검색 실패: ' + (res.message || '알 수 없음'), 'err'); return; }
+  approvalProjectMatches = res.projects || [];
+  const exact = approvalProjectMatches.find(m => m.code === keyword || m.name === keyword);
+  const chosen = exact || (approvalProjectMatches.length === 1 ? approvalProjectMatches[0] : null);
+  if (chosen) {
+    setApprovalProjectPick(chosen.code, chosen.name);
+    setApprMsg('프로젝트 확정: ' + chosen.code, 'ok');
+  } else if (!approvalProjectMatches.length) {
+    setApprovalProjectPick('', '');
+    setApprMsg('‘' + keyword + '’ 프로젝트를 못 찾았어요.', 'err');
+  } else {
+    setApprovalProjectPick('', '');
+    setApprMsg(approvalProjectMatches.length + '건이 검색됐어요 — 목록에서 하나를 고르세요.');
+  }
+  renderApprovalProjectPick(approvalProjectMatches);
+  refreshApprovalSheet();
 }
 
 async function lookupApprovalPayday() {
@@ -2624,7 +2706,9 @@ async function openApprovalForm() {
   const month = parseInt(document.getElementById('apprMonth').value, 10);
   const name = (document.getElementById('apprName').value || '').trim();
   if (approvalPayday == null) await lookupApprovalPayday();   // 없으면 먼저 조회
-  const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '' };
+  const pj = approvalProjectSetting();
+  const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '',
+                    project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null };
   setApprBusy(true); setApprMsg('결재 폼 여는 중… 열린 창에서 검토·카드입력·제출하세요.');
   let res = null;
   try {
@@ -2689,6 +2773,7 @@ async function init() {
   document.getElementById('ttreeSubmit').addEventListener('click', submitTtreeRequest);
   document.getElementById('apprLookup').addEventListener('click', lookupApprovalPayday);
   document.getElementById('apprOpen').addEventListener('click', openApprovalForm);
+  document.getElementById('apprProjectLookup').addEventListener('click', lookupApprovalProject);
   document.getElementById('calSelAll').addEventListener('click', () => calSetAll(true));
   document.getElementById('calSelNone').addEventListener('click', () => calSetAll(false));
   bindFormulaBar();

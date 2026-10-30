@@ -2810,10 +2810,13 @@ let tripPayday = null;
 let tripPaySrc = '';
 let tripPaydayMonth = 0;
 const TRIP_DEFAULT_RATE = 250;
+const TRIP_DEFAULT_MEAL_CAP = 12000;
 
 function tripSettings() {
   const s = (state && state.settings) || {};
-  return { rate: parseInt(s.approvalTripRate, 10) || TRIP_DEFAULT_RATE, km: (s.approvalTripKm && typeof s.approvalTripKm === 'object') ? s.approvalTripKm : {} };
+  const cap = parseInt(s.approvalMealCap, 10);
+  return { rate: parseInt(s.approvalTripRate, 10) || TRIP_DEFAULT_RATE, mealCap: isFinite(cap) && cap >= 0 ? cap : TRIP_DEFAULT_MEAL_CAP,
+           km: (s.approvalTripKm && typeof s.approvalTripKm === 'object') ? s.approvalTripKm : {} };
 }
 // approval.compose_trip_title 과 같은 규칙: 'YY/MM/DD 목적지', 여러 날이면 '~DD' 또는 '~MM/DD'.
 function tripTitleText(start, end, dest) {
@@ -2830,13 +2833,15 @@ function tripInputs() {
   const v = id => (document.getElementById(id)?.value || '').trim();
   const n = id => { const x = parseFloat(v(id).replace(/,/g, '')); return isFinite(x) && x > 0 ? Math.round(x) : 0; };
   const start = v('tripStart');
+  const capRaw = v('tripMealCap');
   return { start, end: v('tripEnd') || start, dest: v('tripDest'), km: n('tripKm'), rate: n('tripRate') || tripSettings().rate,
-           toll: n('tripToll'), lodging: n('tripLodging'), meals: !!document.getElementById('tripMeals')?.checked };
+           toll: n('tripToll'), lodging: n('tripLodging'), meals: !!document.getElementById('tripMeals')?.checked,
+           mealCap: capRaw === '' ? tripSettings().mealCap : n('tripMealCap') };
 }
 function tripRowsText(t) {
   const won = n => n.toLocaleString('ko-KR') + '원';
   const rows = [];
-  if (t.meals) rows.push('식대: 출장 기간 법인카드 내역(폼을 열 때 조회)');
+  if (t.meals) rows.push('식대: 출장 기간 법인카드 내역(폼을 열 때 조회' + (t.mealCap ? ', 끼당 ' + won(t.mealCap) + ' 상한' : '') + ')');
   if (t.km) rows.push('유류대 ' + won(t.km * t.rate) + ' (왕복 ' + t.km + 'km × ' + t.rate + '원)');
   if (t.toll) rows.push('톨비 ' + won(t.toll));
   if (t.lodging) rows.push('숙박 ' + won(t.lodging));
@@ -2907,7 +2912,15 @@ function initTripPanel() {
     if (state && state.settings) { state.settings.approvalTripRate = parseInt(rate.value, 10) || TRIP_DEFAULT_RATE; scheduleSave(); }
     refreshTripSheet();
   });
-  ['tripStart', 'tripEnd', 'tripDest', 'tripKm', 'tripToll', 'tripLodging', 'tripMeals', 'tripRate'].forEach(id => {
+  const cap = document.getElementById('tripMealCap');
+  cap.value = tripSettings().mealCap;
+  cap.addEventListener('change', () => {
+    const v = parseInt(cap.value, 10);
+    if (state && state.settings) { state.settings.approvalMealCap = isFinite(v) && v >= 0 ? v : TRIP_DEFAULT_MEAL_CAP; scheduleSave(); }
+    cap.value = tripSettings().mealCap;
+    refreshTripSheet();
+  });
+  ['tripStart', 'tripEnd', 'tripDest', 'tripKm', 'tripToll', 'tripLodging', 'tripMeals', 'tripRate', 'tripMealCap'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', refreshTripSheet);
   });
@@ -2952,7 +2965,8 @@ async function openTripForm() {
   const pj = approvalProjectSetting();
   const payload = { form: 'trip', title: tripTitleText(t.start, t.end, t.dest), payee: name, payday: tripPayday || '',
                     project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null,
-                    start: t.start, end: t.end, dest: t.dest, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging, meals: t.meals };
+                    start: t.start, end: t.end, dest: t.dest, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging, meals: t.meals,
+                    mealCap: t.mealCap };
   setApprBusy(true); setTripMsg('출장 폼 여는 중… 열린 창에서 첨부·검토·제출하세요.');
   let res = null;
   try {
@@ -2962,7 +2976,7 @@ async function openTripForm() {
   setApprBusy(false);
   if (!res) { setTripMsg('실패', 'err'); return; }
   if (res.status === 'login_required') setTripMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err');
-  else if (res.status === 'started') setTripMsg((res.message || '출장 결재 창을 열었어요.') + ' 식대·행이 채워지면 캡처 첨부·검토 후 제출하세요.', 'ok');
+  else if (res.status === 'started') setTripMsg((res.message || '출장 결재 창을 열었어요.') + ' 식대·행이 채워지면 캡처 첨부·검토 후 제출하세요. 창에서 카드내역을 더 넣어도 식대 적요·상한이 적용돼요.', 'ok');
   else if (res.status === 'ok') setTripMsg('폼 창을 닫았어요.', 'ok');
   else setTripMsg('실패: ' + (res.message || '알 수 없음'), 'err');
 }

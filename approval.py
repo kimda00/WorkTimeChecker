@@ -14,8 +14,11 @@
      프로젝트 검색은 폼이 쓰는 같은 API(/api/amaranth/project/projectDepts)를 쓴다.
   5) 출장비용지급품의(prefill_trip): 같은 전표 구조의 출장 양식(기본 3279)을 열어
      제목('YY/MM/DD 목적지')·지급처·지급요청일을 채우고, '카드내역' 팝업으로 출장 기간의
-     법인카드 사용내역을 전부 가져와(식대) 기본적요를 넣은 뒤, '행추가'로 유류대·톨비·
-     숙박 개인카드 행을 만들어 기본적요·증빙일자·공급가액·상세내용을 채운다.
+     법인카드 사용내역을 전부 가져와(식대) 기본적요·시간대별 상세내용(아침/점심/저녁식대)을
+     넣고 한 끼 상한(기본 12,000원)을 넘는 행은 공급가액을 상한으로 깎은 뒤(폼이 부가세 0·
+     비과세로 바꾼다), '행추가'로 유류대·톨비·숙박 개인카드 행을 만들어 기본적요·증빙일자·
+     공급가액·상세내용을 채운다. 창이 열려 있는 동안 사용자가 카드내역을 더 눌러 추가한
+     행에도 식대 처리를 이어서 한다.
      기본적요는 폼의 팝업이 쓰는 부서별 목록 API(/api/amaranth/accountDept)에서 코드로 고르고,
      지급처·행 거래처(본인)는 거래처 검색 API(/api/amaranth/integration/trade)로 코드를 찾아
      td 의 data-code/data-name 까지 맞춘다(제출 시 읽는 값). 첨부·검토·제출은 사용자 몫.
@@ -37,6 +40,7 @@ DEFAULT_FINANCE_BOARD = 46
 DEFAULT_APPROVAL_URL = ORIGIN + "/app/approval/document/new/352/3101"
 DEFAULT_TRIP_FORM_ID = 3279        # 출장비용지급품의(AMARANTH 10) 양식 id
 DEFAULT_FUEL_RATE = 250            # 자차 유류대 단가(원/km)
+DEFAULT_MEAL_CAP = 12000           # 식대 한 끼 상한(원). 0 이면 제한 없음
 # 출장비용지급품의 행에 쓰는 기본적요 코드(그룹웨어 '기본적요' 목록의 rmkNo).
 TRIP_ACCTS = {
     "meal": "6075",      # (용역) 법카 - 출장외근비(식대)
@@ -447,24 +451,43 @@ _ROW_FILL_JS = r"""
 };
 """
 
-# 카드내역으로 들어온 행 중 기본적요가 비어 있는 것에 식대 적요와 상세내용을 넣는다.
-_CARD_RMK_JS = r"""
+# 카드내역으로 들어온 행(corp_card_row) 중 아직 처리하지 않은 것(data-wt-meal 없음)에:
+#  - 기본적요가 비었으면 식대 적요(6075) data-* 와 표시값
+#  - 상세내용이 비었으면 승인시간으로 '출장외근비 - 아침/점심/저녁식대' (11시 전 아침, 16시 전 점심, 그 뒤 저녁)
+#  - 합계가 상한(cap)을 넘으면 공급가액을 상한으로 바꾸고 change 를 쏜다 → 폼이 부가세 0 · 법인카드(비과세)로 정리
+_MEAL_ROWS_JS = r"""
 (x) => {
-  let n = 0; const a = x.acct;
+  let n = 0, capped = 0; const a = x.acct, cap = Number(x.cap) || 0;
+  const num = s => Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
+  const mealOf = t => { const h = parseInt(String(t || '').split(':')[0], 10); if (isNaN(h)) return '식대'; return h < 11 ? '아침식대' : (h < 16 ? '점심식대' : '저녁식대'); };
   document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').forEach(tr1 => {
+    if (tr1.getAttribute('data-wt-meal')) return;
+    const tr2 = tr1.nextElementSibling, tr3 = tr2 && tr2.nextElementSibling;
+    if (!tr2 || !tr3) return;
     const rmkTd = tr1.querySelector('.debitRmk'), rmkIn = rmkTd && rmkTd.querySelector('input');
-    if (!rmkIn || (rmkIn.value || '').trim()) return;
-    rmkIn.value = a.rmkNo + ' / ' + a.rmk;
-    const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
-      'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
-      'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
-    for (const k in attrs) rmkTd.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
-    const tr3 = tr1.nextElementSibling && tr1.nextElementSibling.nextElementSibling;
-    const sm = tr3 && tr3.querySelector('.summary input');
-    if (sm && !(sm.value || '').trim()) { sm.value = x.detail; sm.dispatchEvent(new Event('change', { bubbles: true })); }
+    if (a && rmkIn && !(rmkIn.value || '').trim()) {
+      rmkIn.value = a.rmkNo + ' / ' + a.rmk;
+      const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
+        'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
+        'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
+      for (const k in attrs) rmkTd.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
+    }
+    const sm = tr3.querySelector('.summary input');
+    if (sm && !(sm.value || '').trim()) {
+      sm.value = '출장외근비 - ' + mealOf((tr1.querySelector('.apprTime input') || {}).value);
+      sm.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const tot = num((tr2.querySelector('.valueOfTot') || {}).textContent);
+    const sup = tr2.querySelector('.valueOfSupply input');
+    if (cap > 0 && sup && tot > cap) {
+      sup.value = cap.toLocaleString('en-US');
+      sup.dispatchEvent(new Event('change', { bubbles: true }));
+      capped++;
+    }
+    tr1.setAttribute('data-wt-meal', '1');
     n++;
   });
-  return n;
+  return { rows: n, capped };
 };
 """
 
@@ -558,8 +581,10 @@ def prefill(payload):
 
 def prefill_trip(payload):
     """출장비용지급품의 폼을 열어 제목·지급처·지급요청일 + 식대(카드내역) + 유류대·톨비·숙박 행을 채운다.
-    payload: {title?, payee, payday, project, start, end, dest, km, rate, toll, lodging, meals}."""
+    payload: {title?, payee, payday, project, start, end, dest, km, rate, toll, lodging, meals, mealCap}.
+    mealCap(기본 12,000, 0 이면 제한 없음)을 넘는 식대 행은 공급가액을 상한으로 깎는다."""
     payload = dict(payload or {})
+    meal_cap = _num(payload["mealCap"]) if "mealCap" in payload else DEFAULT_MEAL_CAP
     if not (payload.get("title") or "").strip():
         payload["title"] = compose_trip_title(payload.get("start"), payload.get("end"), payload.get("dest"))
     rows = trip_rows(payload)
@@ -578,11 +603,20 @@ def prefill_trip(payload):
             accts = {}
             filled["acctError"] = str(e)
         meal = accts.get(TRIP_ACCTS["meal"])
-        if meal and (filled.get("cards") or {}).get("added"):
-            try:
-                filled["mealRows"] = page.evaluate(_CARD_RMK_JS, {"acct": meal, "detail": "출장외근비 - 식대"})
-            except Exception as e:
-                filled["mealRows"] = str(e)
+        meal_arg = {"acct": meal, "cap": meal_cap}
+        filled["mealRows"] = 0
+        filled["mealCapped"] = 0
+
+        def meal_tick():
+            """카드내역 행에 식대 적요·상세·상한 적용. 창이 열려 있는 동안 반복해 사용자가 더 넣은 행도 처리."""
+            r = page.evaluate(_MEAL_ROWS_JS, meal_arg) or {}
+            filled["mealRows"] += int(r.get("rows") or 0)
+            filled["mealCapped"] += int(r.get("capped") or 0)
+
+        try:
+            meal_tick()
+        except Exception as e:
+            filled["mealError"] = str(e)
         done = []
         for row in rows:
             acct = accts.get(row["acct"])
@@ -599,13 +633,15 @@ def prefill_trip(payload):
                 r = {"error": str(e)}
             done.append(dict({"kind": row["kind"], "amount": row["amount"]}, **r))
         filled["rows"] = done
+        return meal_tick
 
     return _run_form(_trip_url(), payload, steps)
 
 
 def _run_form(url, payload, steps):
     """결재 폼을 헤드풀로 열고 공통 자동채움(제목·지급처·지급요청일·프로젝트) 뒤 steps(page, ctx, filled, dept, trade)
-    를 실행하고, 창이 닫힐 때까지(최대 15분) 빈 프로젝트/거래처 셀을 2초마다 채운다."""
+    를 실행하고, 창이 닫힐 때까지(최대 15분) 빈 프로젝트/거래처 셀을 2초마다 채운다.
+    steps 가 함수를 돌려주면 그 함수(tick)도 같은 주기로 부른다."""
     if not os.path.exists(STATE):
         return {"status": "login_required", "message": "EHR 로그인이 필요해요."}
     try:
@@ -657,9 +693,10 @@ def _run_form(url, payload, steps):
                 filled["project"] = project
             elif why:
                 filled["projectError"] = why
+            tick = None
             if steps:
                 try:
-                    steps(page, ctx, filled, dept, trade)
+                    tick = steps(page, ctx, filled, dept, trade)
                 except Exception as e:
                     filled["stepsError"] = str(e)
             # 사용자가 검토·카드입력·제출 후 창을 닫을 때까지 대기 (최대 15분).
@@ -676,6 +713,8 @@ def _run_form(url, payload, steps):
                             project_rows += int(r.get("filled") or 0)
                         if trade:
                             trade_rows += int(page.evaluate(_TRADE_FILL_JS, trade) or 0)
+                        if tick:
+                            tick()
                     except Exception:
                         pass   # 페이지 이동/닫힘 중이면 다음 턴에 다시
                 time.sleep(1)

@@ -567,6 +567,7 @@ class WorkTimeUI(unittest.TestCase):
         self.assertEqual(self.text('#tripPayee'), '김다영')
         self.page.locator('#tripKm').fill('278')
         self.page.locator('#tripToll').fill('7500')
+        self.assertIn('식대: 출장 기간 법인카드 내역(폼을 열 때 조회, 끼당 12,000원 상한)', self.text('#tripRows'))
         self.assertIn('유류대 69,500원 (왕복 278km × 250원)', self.text('#tripRows'))
         self.assertIn('톨비 7,500원', self.text('#tripRows'))
         self.page.locator('#tripEnd').fill('2026-10-29')
@@ -579,7 +580,7 @@ class WorkTimeUI(unittest.TestCase):
         p = calls[1][1]
         self.assertEqual((p['form'], p['title'], p['payee'], p['payday']), ('trip', '26/10/28~29 대전 한수원', '김다영', '2026-11-23'))
         self.assertEqual((p['start'], p['end'], p['dest']), ('2026-10-28', '2026-10-29', '대전 한수원'))
-        self.assertEqual((p['km'], p['rate'], p['toll'], p['lodging'], p['meals']), (278, 250, 7500, 0, True))
+        self.assertEqual((p['km'], p['rate'], p['toll'], p['lodging'], p['meals'], p['mealCap']), (278, 250, 7500, 0, True, 12000))
         self.assertIsNone(p['project'])
         self.assertEqual(self.text('#tripPayday'), '2026-11-23')
         self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripKm")

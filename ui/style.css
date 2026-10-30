@@ -1184,6 +1184,9 @@ html[data-theme="excel"] .ttree-badge.deny { color: #d93025; background: rgba(21
 .apprnote { font-size: 11px; color: var(--muted); margin-bottom: 12px; line-height: 1.5; }
 .apprnote b { color: var(--time); }
 .appractions { display: flex; justify-content: flex-end; }
+.apprbar-trip { margin-top: 18px; }
+.apprrow label.apprcheck { flex-direction: row; align-items: center; gap: 6px; padding-bottom: 6px; color: var(--text); }
+.apprrow label.apprcheck input { margin: 0; accent-color: var(--mint); }
 
 /* =================== 퇴근 버스 =================== */
 /* 근무 그리드의 '퇴근 버스' 행 — 정류장을 설정했을 때만 보인다 */

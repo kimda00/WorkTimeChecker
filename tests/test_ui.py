@@ -541,6 +541,55 @@ class WorkTimeUI(unittest.TestCase):
         self.assertFalse(self.page.locator('#ttreeApproval').is_disabled())
         self.assertTrue(self.page.locator('#ttreeOvertimeForm').is_hidden())
 
+    def test_trip_form_takes_ttree_trip_and_sends_rows_with_prefill(self):
+        self.page.evaluate("""() => {
+          window.apprCalls = [];
+          window.pywebview = {api: {
+            ttree_status: async () => ({status: 'ok', leave: [], overtime: [], businessTrip: [
+              {kind: 'businessTrip', id: '1', title: '출장', startDate: '2026-10-28', endDate: '2026-10-28', startTime: '09:00', endTime: '18:00',
+               statusCode: '900', statusName: '승인', customer: '한수원', location: '대전', reason: '회의'},
+              {kind: 'businessTrip', id: '2', title: '출장', startDate: '2026-10-15', endDate: '2026-10-16', statusCode: '999', statusName: '취소', customer: '', location: '경주'}]}),
+            approval_payday: async m => { apprCalls.push(['payday', m]); return {status: 'ok', payday: '2026-11-23', sourceTitle: '11월 지급일정'}; },
+            approval_prefill: async p => { apprCalls.push(['prefill', p]); return {status: 'started'}; },
+            save: async s => { window.savedSettings = s.settings; }
+          }};
+        }""")
+        self.page.evaluate("() => loadTtreeStatus()")
+        self.nav('approval').click()
+        self.page.locator('#apprName').fill('김다영')
+        pick = self.page.locator('#tripPick')
+        self.page.wait_for_function("document.querySelectorAll('#tripPick option').length === 2")   # 직접 입력 + 승인 1건(취소 제외)
+        pick.select_option('0')
+        self.assertEqual(self.page.locator('#tripStart').input_value(), '2026-10-28')
+        self.assertEqual(self.page.locator('#tripEnd').input_value(), '2026-10-28')
+        self.assertEqual(self.page.locator('#tripDest').input_value(), '대전 한수원')
+        self.assertEqual(self.text('#tripTitle'), '26/10/28 대전 한수원')
+        self.assertEqual(self.text('#tripPayee'), '김다영')
+        self.page.locator('#tripKm').fill('278')
+        self.page.locator('#tripToll').fill('7500')
+        self.assertIn('유류대 69,500원 (왕복 278km × 250원)', self.text('#tripRows'))
+        self.assertIn('톨비 7,500원', self.text('#tripRows'))
+        self.page.locator('#tripEnd').fill('2026-10-29')
+        self.page.locator('#tripEnd').dispatch_event('input')
+        self.assertEqual(self.text('#tripTitle'), '26/10/28~29 대전 한수원')
+        self.page.locator('#tripOpen').click()
+        self.page.wait_for_function("apprCalls.some(c => c[0] === 'prefill')")
+        calls = self.page.evaluate('apprCalls')
+        self.assertEqual(calls[0], ['payday', 10])
+        p = calls[1][1]
+        self.assertEqual((p['form'], p['title'], p['payee'], p['payday']), ('trip', '26/10/28~29 대전 한수원', '김다영', '2026-11-23'))
+        self.assertEqual((p['start'], p['end'], p['dest']), ('2026-10-28', '2026-10-29', '대전 한수원'))
+        self.assertEqual((p['km'], p['rate'], p['toll'], p['lodging'], p['meals']), (278, 250, 7500, 0, True))
+        self.assertIsNone(p['project'])
+        self.assertEqual(self.text('#tripPayday'), '2026-11-23')
+        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripKm")
+        self.assertEqual(self.page.evaluate("window.savedSettings.approvalTripKm"), {'대전 한수원': 278})
+        # 같은 목적지를 다시 고르면 지난 왕복 km 가 채워진다
+        self.page.locator('#tripKm').fill('')
+        pick.select_option('')
+        pick.select_option('0')
+        self.assertEqual(self.page.locator('#tripKm').input_value(), '278')
+
     def test_approval_base_project_is_resolved_saved_and_sent_with_prefill(self):
         self.page.evaluate("""() => {
           window.apprCalls = [];

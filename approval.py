@@ -12,6 +12,13 @@
      td.dzproject 의 data-code/data-name 과 input 값이라 그걸 직접 쓴다. 카드내역으로
      행이 나중에 추가되므로 창이 열려 있는 동안 비어 있는 행을 계속 채운다.
      프로젝트 검색은 폼이 쓰는 같은 API(/api/amaranth/project/projectDepts)를 쓴다.
+  5) 출장비용지급품의(prefill_trip): 같은 전표 구조의 출장 양식(기본 3279)을 열어
+     제목('YY/MM/DD 목적지')·지급처·지급요청일을 채우고, '카드내역' 팝업으로 출장 기간의
+     법인카드 사용내역을 전부 가져와(식대) 기본적요를 넣은 뒤, '행추가'로 유류대·톨비·
+     숙박 개인카드 행을 만들어 기본적요·증빙일자·공급가액·상세내용을 채운다.
+     기본적요는 폼의 팝업이 쓰는 부서별 목록 API(/api/amaranth/accountDept)에서 코드로 고르고,
+     지급처·행 거래처(본인)는 거래처 검색 API(/api/amaranth/integration/trade)로 코드를 찾아
+     td 의 data-code/data-name 까지 맞춘다(제출 시 읽는 값). 첨부·검토·제출은 사용자 몫.
 
 인증/세션은 ehr.py 와 같은 .ehr_state.json 을 재사용한다.
 """
@@ -28,6 +35,16 @@ ORIGIN = ehr.ORIGIN
 STATE = ehr.STATE
 DEFAULT_FINANCE_BOARD = 46
 DEFAULT_APPROVAL_URL = ORIGIN + "/app/approval/document/new/352/3101"
+DEFAULT_TRIP_FORM_ID = 3279        # 출장비용지급품의(AMARANTH 10) 양식 id
+DEFAULT_FUEL_RATE = 250            # 자차 유류대 단가(원/km)
+# 출장비용지급품의 행에 쓰는 기본적요 코드(그룹웨어 '기본적요' 목록의 rmkNo).
+TRIP_ACCTS = {
+    "meal": "6075",      # (용역) 법카 - 출장외근비(식대)
+    "fuel": "6377",      # (용역) 개인 - 출장외근비(유류대)
+    "toll": "6379",      # (용역) 개인 - 출장외근비(제반-톨비)
+    "lodging": "6073",   # (용역) 법카 - 출장외근비(숙박) — 개인 숙박 적요가 없어 개인카드로 쓴다
+}
+_API_HEADERS = {"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"}
 LIST_SORT = "sortCriteria+desc%2CthreadRootCode+desc%2CthreadCode+asc"
 _WEEKDAY = ["월", "화", "수", "목", "금", "토", "일"]
 
@@ -61,6 +78,16 @@ def _approval_url():
     return _config("approvalUrl", DEFAULT_APPROVAL_URL)
 
 
+def _trip_url():
+    """출장비용지급품의 새 폼 URL. config 의 tripApprovalUrl 이 있으면 그걸, 없으면 지출결의서 URL 의
+    양식 id 만 tripFormId(기본 3279)로 바꾼다(기안부서 id 는 같다)."""
+    u = _config("tripApprovalUrl")
+    if u:
+        return u
+    form_id = _config("tripFormId", DEFAULT_TRIP_FORM_ID)
+    return re.sub(r"/\d+/?$", "/%s" % form_id, _approval_url())
+
+
 def _dept_from_url(url):
     """결재 폼 URL '/document/new/{기안부서id}/{양식id}' 에서 부서 id. 프로젝트 검색은 부서별이다."""
     m = re.search(r"/document/new/(\d+)/", url or "")
@@ -80,7 +107,7 @@ def _project_api_by(ctx, keyword, dept, field):
                         ensure_ascii=False)
     u = "%s/api/amaranth/project/projectDepts?params=%s&flag=false&offset=20&page=0&property=projectCode&direction=desc" % (
         ORIGIN, urllib.parse.quote(params))
-    r = ctx.request.get(u, headers={"Accept": "application/json", "X-Requested-With": "XMLHttpRequest"})
+    r = ctx.request.get(u, headers=_API_HEADERS)
     if not r.ok:
         raise RuntimeError("프로젝트 검색 실패 (HTTP %d)" % r.status)
     items = (r.json() or {}).get("data") or []
@@ -122,6 +149,37 @@ def search_projects(keyword):
         return {"status": "error", "message": str(e)}
 
 
+def _acct_list(ctx, dept, company="1000"):
+    """폼의 '기본적요' 팝업이 쓰는 부서별 기본적요 목록. [{rmkNo, rmk, crAcctCode, ...}]"""
+    import urllib.parse
+    params = json.dumps({"depts": [dept] if dept else [], "cdCompany": company})
+    r = ctx.request.get("%s/api/amaranth/accountDept?params=%s" % (ORIGIN, urllib.parse.quote(params)),
+                        headers=_API_HEADERS)
+    if not r.ok:
+        raise RuntimeError("기본적요 목록 조회 실패 (HTTP %d)" % r.status)
+    return (r.json() or {}).get("data") or []
+
+
+def _trade_lookup(ctx, name, company="1000"):
+    """거래처 검색(폼의 '거래처'/'지급처' 팝업과 같은 API). 이름이 정확히 같은 일반 거래처
+    (법인카드 거래처 trFg=9 제외) → {code, name, regNb}. 못 찾으면 None."""
+    kw = (name or "").strip()
+    if not kw:
+        return None
+    r = ctx.request.get(ORIGIN + "/api/amaranth/integration/trade",
+                        params={"coCd": company, "trFg": "", "searchtype": "trNm", "keyword": kw,
+                                "offset": 20, "page": 0},
+                        headers=_API_HEADERS)
+    if not r.ok:
+        return None
+    items = [it for it in ((r.json() or {}).get("data") or [])
+             if (it.get("trNm") or "").strip() == kw and str(it.get("trFg") or "") != "9"]
+    if not items:
+        return None
+    it = items[0]
+    return {"code": it.get("trCd") or "", "name": it.get("trNm") or "", "regNb": it.get("regNb") or ""}
+
+
 def _headers(board):
     return {"Accept": "application/json, text/plain, */*",
             "X-Requested-With": "XMLHttpRequest",
@@ -133,6 +191,54 @@ def compose_title(expense_month, name=""):
     m = int(expense_month)
     tail = name.strip() if (name and name.strip()) else "000"
     return "%d월 지출결의서(개인경비) - %s" % (m, tail)
+
+
+def _num(v):
+    """'69,500' / 69500.0 / '' → int. 숫자가 아니면 0."""
+    try:
+        return int(round(float(str(v).replace(",", "").strip() or 0)))
+    except Exception:
+        return 0
+
+
+def compose_trip_title(start, end="", dest=""):
+    """출장비용지급품의 제목: 'YY/MM/DD 목적지'. 여러 날이면 'YY/MM/DD~DD'(같은 달) 또는 'YY/MM/DD~MM/DD'."""
+    dest = (dest or "").strip()
+    try:
+        s = datetime.date.fromisoformat((start or "")[:10])
+    except Exception:
+        return dest
+    head = s.strftime("%y/%m/%d")
+    try:
+        e = datetime.date.fromisoformat((end or "")[:10])
+    except Exception:
+        e = s
+    if e > s:
+        head += "~" + (e.strftime("%d") if (e.year, e.month) == (s.year, s.month) else e.strftime("%m/%d"))
+    return (head + " " + dest).strip()
+
+
+def trip_rows(payload):
+    """출장 입력 → 개인카드 전표 행 [{kind, acct, amount, date, detail}].
+    유류대 = 왕복 km × 단가(기본 250원), 톨비·숙박은 금액 그대로. 0 이면 행을 만들지 않는다.
+    식대(법인카드)는 카드내역 팝업에서 가져오므로 여기 없다."""
+    payload = payload or {}
+    km = _num(payload.get("km"))
+    rate = _num(payload.get("rate")) or DEFAULT_FUEL_RATE
+    toll = _num(payload.get("toll"))
+    lodging = _num(payload.get("lodging"))
+    date = (payload.get("start") or "")[:10]
+    rows = []
+    if km > 0:
+        rows.append({"kind": "fuel", "acct": TRIP_ACCTS["fuel"], "amount": km * rate, "date": date,
+                     "detail": "왕복 %dkm(자차 이용)" % km})
+    if toll > 0:
+        rows.append({"kind": "toll", "acct": TRIP_ACCTS["toll"], "amount": toll, "date": date,
+                     "detail": "왕복 하이패스 비용"})
+    if lodging > 0:
+        rows.append({"kind": "lodging", "acct": TRIP_ACCTS["lodging"], "amount": lodging, "date": date,
+                     "detail": "출장 숙박비"})
+    return rows
 
 
 def _fmt_date_kr(iso):
@@ -283,6 +389,137 @@ _PROJECT_FILL_JS = r"""
 """
 
 
+# 지급처(.tradeCd) td 에 거래처 코드 부여 — 폼의 '거래처' 팝업이 하는 것과 같다(제출 시 data-code 를 읽는다).
+_PAYEE_ATTR_JS = r"""
+(tr) => {
+  const td = document.querySelector('.tradeCd'); if (!td) return false;
+  td.setAttribute('data-code', tr.code); td.setAttribute('data-name', tr.name); td.setAttribute('data-regNb', tr.regNb || '');
+  return true;
+};
+"""
+
+# 개인카드(카드내역이 아닌) 행의 빈 '거래처' 셀을 지급처(본인)로 채운다.
+_TRADE_FILL_JS = r"""
+(tr) => {
+  let filled = 0;
+  document.querySelectorAll('#slipBplTable tr.debitTr:not(.corp_card_row)').forEach(tr1 => {
+    const td = tr1.nextElementSibling && tr1.nextElementSibling.querySelector('.dztrade'); if (!td) return;
+    const inp = td.querySelector('input'); if (!inp || (inp.value || '').trim()) return;
+    inp.value = tr.name; td.setAttribute('data-code', tr.code); td.setAttribute('data-name', tr.name); td.setAttribute('data-regNb', tr.regNb || '');
+    filled++;
+  });
+  return filled;
+};
+"""
+
+# 방금 '행추가'로 생긴 마지막 행(3줄: debitTr / debitTr2 / debitTr3)을 채운다.
+# 기본적요는 팝업 콜백과 같은 data-* 를 td 에 넣고, 증빙유형 '개인카드', 증빙일자, 공급가액(부가세 0), 상세내용.
+# change 이벤트로 폼 JS 가 행 합계·결의금액·회계일자를 다시 계산한다.
+_ROW_FILL_JS = r"""
+(row) => {
+  const trs = document.querySelectorAll('#slipBplTable tr.debitTr');
+  const tr1 = trs[trs.length - 1]; if (!tr1) return { error: 'no row' };
+  const tr2 = tr1.nextElementSibling, tr3 = tr2 && tr2.nextElementSibling;
+  if (!tr2 || !tr3) return { error: 'row shape' };
+  const fire = (el, t) => el && el.dispatchEvent(new Event(t, { bubbles: true }));
+  const a = row.acct;
+  const rmkTd = tr1.querySelector('.debitRmk'), rmkIn = rmkTd && rmkTd.querySelector('input');
+  if (!rmkIn) return { error: 'no rmk' };
+  rmkIn.value = a.rmkNo + ' / ' + a.rmk;
+  const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
+    'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
+    'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
+  for (const k in attrs) rmkTd.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
+  if (!String(a.crAcctName || '').includes('차량유지비')) {   // 폼의 checkCrAcctWorkCar 와 동일
+    const wc = tr2.querySelector('.workcar input'); if (wc) { wc.value = ''; wc.disabled = true; }
+    const wtd = tr2.querySelector('.workcar'); if (wtd) { wtd.setAttribute('data-code', ''); wtd.setAttribute('data-name', ''); }
+  }
+  const sel = tr1.querySelector('.taxInvestigationDivision select'); if (sel) { sel.value = '개인카드'; fire(sel, 'change'); }
+  const dt = tr1.querySelector('.taxDate input'); if (dt) { dt.value = row.date; fire(dt, 'change'); }
+  const sup = tr2.querySelector('.valueOfSupply input'); if (sup) { sup.value = row.amount; fire(sup, 'change'); }
+  const vat = tr2.querySelector('.valueOfVAT input'); if (vat) { vat.value = '0'; fire(vat, 'change'); }
+  const sm = tr3.querySelector('.summary input'); if (sm) { sm.value = row.detail; fire(sm, 'change'); }
+  if (row.trade) {
+    const td = tr2.querySelector('.dztrade'); const inp = td && td.querySelector('input');
+    if (inp) { inp.value = row.trade.name; td.setAttribute('data-code', row.trade.code); td.setAttribute('data-name', row.trade.name); td.setAttribute('data-regNb', row.trade.regNb || ''); }
+  }
+  return { tot: ((tr2.querySelector('.valueOfTot') || {}).textContent || '').trim(), rows: trs.length };
+};
+"""
+
+# 카드내역으로 들어온 행 중 기본적요가 비어 있는 것에 식대 적요와 상세내용을 넣는다.
+_CARD_RMK_JS = r"""
+(x) => {
+  let n = 0; const a = x.acct;
+  document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').forEach(tr1 => {
+    const rmkTd = tr1.querySelector('.debitRmk'), rmkIn = rmkTd && rmkTd.querySelector('input');
+    if (!rmkIn || (rmkIn.value || '').trim()) return;
+    rmkIn.value = a.rmkNo + ' / ' + a.rmk;
+    const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
+      'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
+      'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
+    for (const k in attrs) rmkTd.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
+    const tr3 = tr1.nextElementSibling && tr1.nextElementSibling.nextElementSibling;
+    const sm = tr3 && tr3.querySelector('.summary input');
+    if (sm && !(sm.value || '').trim()) { sm.value = x.detail; sm.dispatchEvent(new Event('change', { bubbles: true })); }
+    n++;
+  });
+  return n;
+};
+"""
+
+# 카드내역 팝업: 기간 입력 → 조회 → 결과 전체 체크 → '입력'. (팝업은 체크박스의 checked 속성으로 선택을 읽는다)
+_CARD_DATES_JS = r"""
+(d) => {
+  const s = document.getElementById('apprDateStart'), e = document.getElementById('apprDateEnd');
+  if (!s || !e) return false;
+  s.value = d.start; e.value = d.end;
+  s.dispatchEvent(new Event('change', { bubbles: true })); e.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+};
+"""
+_CARD_CHECK_ALL_JS = r"""
+() => {
+  const cbs = document.querySelectorAll('#dataList tbody .dataTd input[type=checkbox]');
+  cbs.forEach(c => { c.checked = true; c.setAttribute('checked', 'checked'); });
+  return cbs.length;
+};
+"""
+
+
+def _add_card_rows(page, start, end):
+    """'카드내역' 팝업으로 start~end(YYYY-MM-DD) 의 법인카드 사용내역을 모두 전표 행으로 가져온다.
+    페이지 안에서만 일어나는 일(제출 아님). {found, added} 또는 {error}."""
+    out = {"found": 0, "added": 0}
+    btn = page.locator("#corpCardUsagePopupBtn")
+    if not btn.count() or not btn.first.is_visible():
+        out["error"] = "카드내역 버튼이 없어요."
+        return out
+    before = page.evaluate("document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').length")
+    btn.first.click(timeout=5000)
+    page.wait_for_selector("#apprDateStart", timeout=20000)
+    page.wait_for_timeout(1500)
+    page.evaluate(_CARD_DATES_JS, {"start": start, "end": end})
+    page.locator("#searchBtn").click(timeout=5000)
+    try:   # 조회 결과(또는 '내역 없음' 행)가 다시 그려질 때까지
+        page.wait_for_function("document.querySelectorAll('#dataList tbody tr').length > 0", timeout=15000)
+    except Exception:
+        pass
+    page.wait_for_timeout(1200)
+    n = page.evaluate(_CARD_CHECK_ALL_JS)
+    out["found"] = int(n or 0)
+    popup = page.locator("#corpCardUsagePopup")
+    if out["found"]:
+        popup.locator("a.btn_major_s", has_text="입력").first.click(timeout=5000)
+        page.wait_for_timeout(2000)
+        after = page.evaluate("document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').length")
+        out["added"] = max(0, int(after) - int(before))
+    else:
+        popup.locator("a.btn_minor_s", has_text="닫기").first.click(timeout=5000)
+        page.wait_for_timeout(500)
+    return out
+
+
 def _resolve_project(ctx, project, url):
     """payload.project ({code,name} 또는 {keyword} / 문자열) → {code,name} 또는 None(+사유)."""
     if not project:
@@ -311,7 +548,64 @@ def _resolve_project(ctx, project, url):
 def prefill(payload):
     """헤드풀 브라우저로 결재 폼을 열고 텍스트 필드를 자동채움. 창은 사용자가 닫을 때까지 유지.
     payload: {title, payee, payday, project}. 카드내역/검토/제출은 사용자 몫.
-    project 가 있으면 창이 열려 있는 동안 전표 행의 빈 프로젝트 셀을 계속 채운다."""
+    project 가 있으면 창이 열려 있는 동안 전표 행의 빈 프로젝트 셀을 계속 채운다.
+    payload.form == 'trip' 이면 출장비용지급품의(prefill_trip)."""
+    payload = payload or {}
+    if payload.get("form") == "trip":
+        return prefill_trip(payload)
+    return _run_form(_approval_url(), payload, None)
+
+
+def prefill_trip(payload):
+    """출장비용지급품의 폼을 열어 제목·지급처·지급요청일 + 식대(카드내역) + 유류대·톨비·숙박 행을 채운다.
+    payload: {title?, payee, payday, project, start, end, dest, km, rate, toll, lodging, meals}."""
+    payload = dict(payload or {})
+    if not (payload.get("title") or "").strip():
+        payload["title"] = compose_trip_title(payload.get("start"), payload.get("end"), payload.get("dest"))
+    rows = trip_rows(payload)
+    start = (payload.get("start") or "")[:10]
+    end = (payload.get("end") or start)[:10] or start
+
+    def steps(page, ctx, filled, dept, trade):
+        if payload.get("meals") and start:
+            try:
+                filled["cards"] = _add_card_rows(page, start, end)
+            except Exception as e:
+                filled["cards"] = {"error": str(e)}
+        try:
+            accts = {str(a.get("rmkNo")): a for a in _acct_list(ctx, dept)}
+        except Exception as e:
+            accts = {}
+            filled["acctError"] = str(e)
+        meal = accts.get(TRIP_ACCTS["meal"])
+        if meal and (filled.get("cards") or {}).get("added"):
+            try:
+                filled["mealRows"] = page.evaluate(_CARD_RMK_JS, {"acct": meal, "detail": "출장외근비 - 식대"})
+            except Exception as e:
+                filled["mealRows"] = str(e)
+        done = []
+        for row in rows:
+            acct = accts.get(row["acct"])
+            if not acct:
+                done.append({"kind": row["kind"], "error": "기본적요 %s 가 부서 목록에 없어요." % row["acct"]})
+                continue
+            try:
+                page.locator("#plusRow").first.click(timeout=5000)
+                page.wait_for_timeout(600)
+                r = page.evaluate(_ROW_FILL_JS, {"acct": acct, "date": _fmt_date_kr(row["date"]),
+                                                 "amount": "{:,}".format(row["amount"]), "detail": row["detail"],
+                                                 "trade": trade}) or {}
+            except Exception as e:
+                r = {"error": str(e)}
+            done.append(dict({"kind": row["kind"], "amount": row["amount"]}, **r))
+        filled["rows"] = done
+
+    return _run_form(_trip_url(), payload, steps)
+
+
+def _run_form(url, payload, steps):
+    """결재 폼을 헤드풀로 열고 공통 자동채움(제목·지급처·지급요청일·프로젝트) 뒤 steps(page, ctx, filled, dept, trade)
+    를 실행하고, 창이 닫힐 때까지(최대 15분) 빈 프로젝트/거래처 셀을 2초마다 채운다."""
     if not os.path.exists(STATE):
         return {"status": "login_required", "message": "EHR 로그인이 필요해요."}
     try:
@@ -319,12 +613,12 @@ def prefill(payload):
     except Exception as e:
         return {"status": "error", "message": "playwright 미설치: %s" % e}
 
+    payload = payload or {}
     data = {
-        "title": (payload or {}).get("title") or "",
-        "payee": (payload or {}).get("payee") or "",
-        "payday": _fmt_date_kr((payload or {}).get("payday") or ""),
+        "title": payload.get("title") or "",
+        "payee": payload.get("payee") or "",
+        "payday": _fmt_date_kr(payload.get("payday") or ""),
     }
-    url = _approval_url()
     try:
         with sync_playwright() as p:
             b = ehr._launch(p, headless=False)
@@ -347,25 +641,46 @@ def prefill(payload):
                 filled = page.evaluate(_AUTOFILL_JS, data) or {}
             except Exception as e:
                 filled = {"error": str(e)}
-            project, why = _resolve_project(ctx, (payload or {}).get("project"), url)
+            dept = _dept_from_url(url)
+            # 지급처(본인) 거래처 코드 — 폼은 팝업으로 고른 td 의 data-code 를 제출에 쓴다.
+            trade = None
+            if data["payee"]:
+                try:
+                    trade = _trade_lookup(ctx, data["payee"])
+                    if trade:
+                        page.evaluate(_PAYEE_ATTR_JS, trade)
+                        filled["payeeCode"] = trade["code"]
+                except Exception as e:
+                    filled["payeeError"] = str(e)
+            project, why = _resolve_project(ctx, payload.get("project"), url)
             if project:
                 filled["project"] = project
             elif why:
                 filled["projectError"] = why
+            if steps:
+                try:
+                    steps(page, ctx, filled, dept, trade)
+                except Exception as e:
+                    filled["stepsError"] = str(e)
             # 사용자가 검토·카드입력·제출 후 창을 닫을 때까지 대기 (최대 15분).
-            # 그동안 카드내역 등으로 생긴 행의 빈 프로젝트 셀을 2초마다 채운다.
+            # 그동안 카드내역/행추가로 생긴 행의 빈 프로젝트·거래처 셀을 2초마다 채운다.
             project_rows = 0
+            trade_rows = 0
             for i in range(900):
                 if not ctx.pages:
                     break
-                if project and i % 2 == 0:
+                if i % 2 == 0:
                     try:
-                        r = page.evaluate(_PROJECT_FILL_JS, project) or {}
-                        project_rows += int(r.get("filled") or 0)
+                        if project:
+                            r = page.evaluate(_PROJECT_FILL_JS, project) or {}
+                            project_rows += int(r.get("filled") or 0)
+                        if trade:
+                            trade_rows += int(page.evaluate(_TRADE_FILL_JS, trade) or 0)
                     except Exception:
                         pass   # 페이지 이동/닫힘 중이면 다음 턴에 다시
                 time.sleep(1)
             filled["projectRows"] = project_rows
+            filled["tradeRows"] = trade_rows
             try:
                 ctx.storage_state(path=STATE)   # 세션 연장
             except Exception:
@@ -398,7 +713,11 @@ if __name__ == "__main__":
     elif cmd == "projectjson":
         payload = _read_stdin_payload()
         print(json.dumps(search_projects(payload.get("keyword") or ""), ensure_ascii=False))
+    elif cmd == "tripjson":
+        print(json.dumps(prefill_trip(_read_stdin_payload()), ensure_ascii=False))
     else:
         month = int(sys.argv[2]) if len(sys.argv) > 2 else datetime.date.today().month
         print("title:", compose_title(month, "홍길동"))
+        print("trip title:", compose_trip_title("2026-10-28", "2026-10-28", "대전 한수원"),
+              json.dumps(trip_rows({"start": "2026-10-28", "km": 278, "toll": 7500}), ensure_ascii=False))
         print(json.dumps(fetch_payday(month), ensure_ascii=False))

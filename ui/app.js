@@ -2322,6 +2322,8 @@ async function loadTtreeStatus() {
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setTtreeBusy(false);
   if (res && res.status === 'ok') {
+    ttreeStatusData = res;
+    renderTripPick();
     renderTtreeList('ttreeLeaveList', res.leave || [], '조회된 휴가 신청이 없습니다.');
     renderTtreeList('ttreeBsrpList', res.businessTrip || [], '조회된 출장 신청이 없습니다.');
     renderTtreeList('ttreeOvertimeList', res.overtime || [], res.warnings?.length ? '연장근무 현황 조회 실패' : '조회된 연장근무 신청이 없습니다.');
@@ -2694,6 +2696,7 @@ function initApprovalPanel() {
     setApprovalProjectPick(m ? m.code : '', m ? m.name : '');
     refreshApprovalSheet();
   });
+  initTripPanel();
 }
 
 function apprTitleText(month, name) {
@@ -2715,6 +2718,7 @@ function refreshApprovalSheet() {
     else if (pj.keyword) { pjText.textContent = pj.keyword; pjSrc.textContent = '(미확정 — 폼을 열 때 검색해 유일한 결과만 적용)'; }
     else { pjText.textContent = '—'; pjSrc.textContent = '(비우면 프로젝트는 채우지 않아요)'; }
   }
+  refreshTripSheet();
 }
 
 function setApprMsg(msg, cls) {
@@ -2722,7 +2726,7 @@ function setApprMsg(msg, cls) {
   if (el) { el.textContent = msg || ''; el.className = 'mealcaption' + (cls ? ' ' + cls : ''); }
 }
 function setApprBusy(busy) {
-  ['apprLookup', 'apprOpen', 'apprProjectLookup'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
+  ['apprLookup', 'apprOpen', 'apprProjectLookup', 'tripOpen'].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = busy; });
 }
 
 async function lookupApprovalProject() {
@@ -2798,6 +2802,172 @@ async function openApprovalForm() {
 }
 
 
+/* ---------------- 출장비용지급품의 ---------------- */
+// 입력(출장일·목적지·왕복 km·하이패스·숙박·식대 여부)은 TTree 출장 신청에서 골라 채울 수 있고,
+// 지급처·기본 프로젝트는 위 지출결의서 블록의 설정을 같이 쓴다. 실제 채움은 approval.prefill_trip.
+let ttreeStatusData = null;        // 마지막 TTree 현황(출장 목록 재사용)
+let tripPayday = null;
+let tripPaySrc = '';
+let tripPaydayMonth = 0;
+const TRIP_DEFAULT_RATE = 250;
+
+function tripSettings() {
+  const s = (state && state.settings) || {};
+  return { rate: parseInt(s.approvalTripRate, 10) || TRIP_DEFAULT_RATE, km: (s.approvalTripKm && typeof s.approvalTripKm === 'object') ? s.approvalTripKm : {} };
+}
+// approval.compose_trip_title 과 같은 규칙: 'YY/MM/DD 목적지', 여러 날이면 '~DD' 또는 '~MM/DD'.
+function tripTitleText(start, end, dest) {
+  dest = (dest || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start || '')) return dest;
+  const p2 = n => String(n).padStart(2, '0');
+  const s = new Date(start + 'T00:00:00');
+  const e = /^\d{4}-\d{2}-\d{2}$/.test(end || '') ? new Date(end + 'T00:00:00') : s;
+  let head = String(s.getFullYear()).slice(2) + '/' + p2(s.getMonth() + 1) + '/' + p2(s.getDate());
+  if (e > s) head += '~' + ((e.getFullYear() === s.getFullYear() && e.getMonth() === s.getMonth()) ? p2(e.getDate()) : p2(e.getMonth() + 1) + '/' + p2(e.getDate()));
+  return (head + ' ' + dest).trim();
+}
+function tripInputs() {
+  const v = id => (document.getElementById(id)?.value || '').trim();
+  const n = id => { const x = parseFloat(v(id).replace(/,/g, '')); return isFinite(x) && x > 0 ? Math.round(x) : 0; };
+  const start = v('tripStart');
+  return { start, end: v('tripEnd') || start, dest: v('tripDest'), km: n('tripKm'), rate: n('tripRate') || tripSettings().rate,
+           toll: n('tripToll'), lodging: n('tripLodging'), meals: !!document.getElementById('tripMeals')?.checked };
+}
+function tripRowsText(t) {
+  const won = n => n.toLocaleString('ko-KR') + '원';
+  const rows = [];
+  if (t.meals) rows.push('식대: 출장 기간 법인카드 내역(폼을 열 때 조회)');
+  if (t.km) rows.push('유류대 ' + won(t.km * t.rate) + ' (왕복 ' + t.km + 'km × ' + t.rate + '원)');
+  if (t.toll) rows.push('톨비 ' + won(t.toll));
+  if (t.lodging) rows.push('숙박 ' + won(t.lodging));
+  return rows.length ? rows.join(' · ') : '—';
+}
+function setTripMsg(msg, cls) {
+  const el = document.getElementById('tripMsg');
+  if (el) { el.textContent = msg || ''; el.className = 'mealcaption' + (cls ? ' ' + cls : ''); }
+}
+function refreshTripSheet() {
+  const titleEl = document.getElementById('tripTitle');
+  if (!titleEl) return;
+  const t = tripInputs();
+  const name = (document.getElementById('apprName')?.value || '').trim();
+  titleEl.textContent = tripTitleText(t.start, t.end, t.dest) || '—';
+  document.getElementById('tripPayee').textContent = name || '—';
+  const month = t.start ? parseInt(t.start.slice(5, 7), 10) : 0;
+  if (month !== tripPaydayMonth) { tripPayday = null; tripPaySrc = ''; tripPaydayMonth = month; }
+  document.getElementById('tripPayday').textContent = tripPayday || '—';
+  document.getElementById('tripPaySrc').textContent = tripPayday ? tripPaySrc : (month ? '(' + month + '월 지출 → 폼을 열 때 지급일정 공지에서 조회)' : '');
+  document.getElementById('tripRows').textContent = tripRowsText(t);
+}
+// TTree 출장 신청(반려·취소 제외)을 최근순으로 선택 목록에.
+function renderTripPick() {
+  const sel = document.getElementById('tripPick');
+  if (!sel) return;
+  const cur = sel.value;
+  const trips = ((ttreeStatusData && ttreeStatusData.businessTrip) || [])
+    .filter(it => !['800', '999'].includes(String(it.statusCode || '')))
+    .slice().sort((a, b) => String(b.startDate || '').localeCompare(String(a.startDate || '')));
+  sel.innerHTML = '';
+  const first = document.createElement('option');
+  first.value = ''; first.textContent = trips.length ? '직접 입력' : 'TTree 출장 내역 없음 — 직접 입력';
+  sel.appendChild(first);
+  trips.forEach((it, i) => {
+    const o = document.createElement('option');
+    o.value = String(i);
+    const period = (it.startDate || '') + (it.endDate && it.endDate !== it.startDate ? '~' + it.endDate : '');
+    o.textContent = [period, it.title, it.customer, it.location, it.statusName].filter(Boolean).join(' · ');
+    sel.appendChild(o);
+  });
+  sel._trips = trips;
+  if (Array.from(sel.options).some(o => o.value === cur)) sel.value = cur;
+}
+function applyTripPick() {
+  const sel = document.getElementById('tripPick');
+  const it = sel && sel._trips && sel._trips[parseInt(sel.value, 10)];
+  if (!it) return;
+  document.getElementById('tripStart').value = it.startDate || '';
+  document.getElementById('tripEnd').value = it.endDate || it.startDate || '';
+  const dest = [it.location, it.customer].filter(Boolean).join(' ').trim();
+  if (dest) document.getElementById('tripDest').value = dest;
+  applyTripKmMemory();
+  refreshTripSheet();
+}
+// 같은 목적지를 다시 고르면 지난번 왕복 km 를 채운다(비어 있을 때만).
+function applyTripKmMemory() {
+  const dest = (document.getElementById('tripDest')?.value || '').trim();
+  const inp = document.getElementById('tripKm');
+  const km = tripSettings().km[dest];
+  if (inp && km && !inp.value) { inp.value = km; refreshTripSheet(); }
+}
+function initTripPanel() {
+  const rate = document.getElementById('tripRate');
+  if (!rate) return;
+  rate.value = tripSettings().rate;
+  rate.addEventListener('change', () => {
+    if (state && state.settings) { state.settings.approvalTripRate = parseInt(rate.value, 10) || TRIP_DEFAULT_RATE; scheduleSave(); }
+    refreshTripSheet();
+  });
+  ['tripStart', 'tripEnd', 'tripDest', 'tripKm', 'tripToll', 'tripLodging', 'tripMeals', 'tripRate'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', refreshTripSheet);
+  });
+  document.getElementById('tripDest').addEventListener('change', applyTripKmMemory);
+  document.getElementById('tripPick').addEventListener('change', applyTripPick);
+  renderTripPick();
+  refreshTripSheet();
+}
+async function lookupTripPayday() {
+  const t = tripInputs();
+  const month = t.start ? parseInt(t.start.slice(5, 7), 10) : 0;
+  if (!month) return;
+  setApprBusy(true); setTripMsg('지급예정일 조회 중…');
+  let res = null;
+  try {
+    if (apiReady('approval_payday')) res = await pywebview.api.approval_payday(month);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  tripPaydayMonth = month;
+  if (res && res.status === 'ok' && res.payday) {
+    tripPayday = res.payday; tripPaySrc = res.sourceTitle ? '(' + res.sourceTitle + ')' : '';
+    setTripMsg('지급예정일 조회 완료', 'ok');
+  } else {
+    tripPayday = null; tripPaySrc = '';
+    setTripMsg((res && (res.message || (res.status === 'login_required' ? 'EHR 로그인이 필요해요.' : ''))) || '지급예정일을 못 찾았어요 — 폼에서 직접 입력하세요.', 'err');
+  }
+  refreshTripSheet();
+}
+async function openTripForm() {
+  const t = tripInputs();
+  const name = (document.getElementById('apprName').value || '').trim();
+  if (!t.start) { setTripMsg('출장 시작일을 입력하세요.', 'err'); return; }
+  if (!t.dest) { setTripMsg('목적지를 입력하세요.', 'err'); return; }
+  if (!name) { setTripMsg('이름(지급처)을 위 지출결의서 칸에 입력하세요.', 'err'); return; }
+  if (!t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없어요 — 거리·톨비·숙박·식대 중 하나는 있어야 해요.', 'err'); return; }
+  if (tripPayday == null) await lookupTripPayday();
+  if (t.km && state && state.settings) {   // 목적지별 왕복 km 기억
+    const km = Object.assign({}, tripSettings().km); km[t.dest] = t.km;
+    state.settings.approvalTripKm = km; scheduleSave();
+  }
+  const pj = approvalProjectSetting();
+  const payload = { form: 'trip', title: tripTitleText(t.start, t.end, t.dest), payee: name, payday: tripPayday || '',
+                    project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null,
+                    start: t.start, end: t.end, dest: t.dest, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging, meals: t.meals };
+  setApprBusy(true); setTripMsg('출장 폼 여는 중… 열린 창에서 첨부·검토·제출하세요.');
+  let res = null;
+  try {
+    if (apiReady('approval_prefill')) res = await pywebview.api.approval_prefill(payload);
+    else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setApprBusy(false);
+  if (!res) { setTripMsg('실패', 'err'); return; }
+  if (res.status === 'login_required') setTripMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err');
+  else if (res.status === 'started') setTripMsg((res.message || '출장 결재 창을 열었어요.') + ' 식대·행이 채워지면 캡처 첨부·검토 후 제출하세요.', 'ok');
+  else if (res.status === 'ok') setTripMsg('폼 창을 닫았어요.', 'ok');
+  else setTripMsg('실패: ' + (res.message || '알 수 없음'), 'err');
+}
+
+
 async function init() {
   if (started) return;
   started = true;
@@ -2848,6 +3018,7 @@ async function init() {
   document.getElementById('apprLookup').addEventListener('click', lookupApprovalPayday);
   document.getElementById('apprOpen').addEventListener('click', openApprovalForm);
   document.getElementById('apprProjectLookup').addEventListener('click', lookupApprovalProject);
+  document.getElementById('tripOpen').addEventListener('click', openTripForm);
   document.getElementById('calSelAll').addEventListener('click', () => calSetAll(true));
   document.getElementById('calSelNone').addEventListener('click', () => calSetAll(false));
   bindFormulaBar();

@@ -1377,7 +1377,7 @@ html[data-theme="excel"] .busbody { height: calc(100vh - 154px); }
 #busSrc { margin: -2px 0 6px; }
 #busSrc:empty { display: none; }
 
-/* 오른쪽 열 탭: 오늘의 버스 / 정류장(지도에서 누른 정류장 미리보기) */
+/* 오른쪽 열 탭: 오늘의 버스 / 실시간 / 정류장(지도에서 누른 정류장 미리보기) */
 .bustabs { display: flex; gap: 3px; flex-shrink: 0; }
 .bustab {
   flex: 0 1 auto;
@@ -1442,6 +1442,23 @@ html[data-theme="excel"] .busbody { height: calc(100vh - 154px); }
 .busprevfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .busprevfoot small { font-size: 10.5px; color: var(--muted); }
 .busprevfoot .ehrbtn { white-space: nowrap; flex-shrink: 0; }
+/* 실시간 탭: 탈 버스별 다가오는 버스(최대 2대) */
+.busliverow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 4px 8px;
+  padding: 7px 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.busliverow:last-child { border-bottom: 0; }
+.busliverow.none { opacity: .55; }
+.busliveinfo { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+.busliveinfo b { color: var(--mint); font-size: 14px; font-weight: 800; margin-right: 4px; }
+.busliveinfo span + span b { color: var(--text); font-size: 12px; }   /* 두 번째로 오는 버스는 덜 강조 */
 .buslist { flex: 1 1 auto; min-height: 0; overflow-y: auto; margin: 0 -4px; }
 .buslive { font-size: 11px; color: var(--muted); margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .buslive[hidden] { display: none; }

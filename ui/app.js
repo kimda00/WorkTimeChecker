@@ -631,6 +631,7 @@ function recompute() {
   renderBusCells(mondayKey, wk, estimates);
   if (viewMode === 'bus') {
     renderBusToday();
+    if (busSideTab === 'live') renderBusLiveTab();
     if (busSideTab === 'stop' && busPreview && busPreview.min !== Math.floor(now / 60)) renderBusPreview();   // 분이 바뀔 때만
   }
 }
@@ -1210,7 +1211,9 @@ let busPopDay = null;         // 열린 선택 팝업의 요일 키
 let busDefaultKey = false;    // config.json 에 배포 기본 키가 있는지(값은 모름)
 let busPreview = null;        // 지도에서 누른(아직 저장 전) 정류장: { stop, saved, routes, take:Set, live, loading, … }
 let busPreviewSeq = 0;        // 미리보기 요청 순번(그새 다른 정류장을 누르면 이전 응답 폐기)
-let busSideTab = 'today';     // 오른쪽 열 탭: 'today' | 'stop'
+let busSideTab = 'today';     // 오른쪽 열 탭: 'today' | 'live' | 'stop'
+let busLiveError = '';        // 마지막 실시간 조회 실패 사유(성공 · 미조회면 '')
+let busLiveTabSig = '';       // 실시간 탭 재렌더 판단(받은 시각 · 30초 경과 · 설정이 바뀔 때만)
 
 function busCfg() {
   const b = state.settings.bus || (state.settings.bus = {});
@@ -1652,7 +1655,7 @@ function saveBusPreview() {
   if (!p || p.loading || !p.routes.length || !p.take.size) return;
   const b = busCfg();
   const s = p.stop;
-  b.stop = { id: s.id, name: s.name, no: s.no || '', lat: s.lat, lng: s.lng, source: s.source, cityCode: s.cityCode || '', nodeId: s.nodeId || '' };
+  b.stop = { id: s.id, name: s.name, no: s.no || '', lat: s.lat, lng: s.lng, source: s.source, cityCode: s.cityCode || '', nodeId: s.nodeId || '', stationId: s.stationId || '' };
   b.routes = p.routes;
   b.take = p.routes.map(r => r.no).filter(no => p.take.has(no));
   busLive = p.live;
@@ -1667,21 +1670,64 @@ function saveBusPreview() {
   setBusStatus('퇴근 정류장 저장 · ' + s.name + ' · 탈 버스 ' + b.take.length + '개', 'ok');
 }
 
-// 오른쪽 열 탭: 오늘의 버스 / 정류장(지도에서 누른 정류장 미리보기 — 있을 때만)
+// 오른쪽 열 탭: 오늘의 버스 / 실시간 / 정류장(지도에서 누른 정류장 미리보기 — 있을 때만)
 function showBusTab(tab) {
-  busSideTab = tab === 'stop' && busPreview ? 'stop' : 'today';
+  busSideTab = tab === 'stop' && busPreview ? 'stop' : tab === 'live' ? 'live' : 'today';
   const stopTab = document.getElementById('busTabStop');
   stopTab.hidden = !busPreview;
   if (busPreview) stopTab.textContent = '정류장 · ' + busPreview.stop.name;
-  [['busTabToday', 'today'], ['busTabStop', 'stop']].forEach(([id, t]) => {
+  [['busTabToday', 'today'], ['busTabLive', 'live'], ['busTabStop', 'stop']].forEach(([id, t]) => {
     const el = document.getElementById(id);
     el.classList.toggle('active', busSideTab === t);
     el.setAttribute('aria-selected', String(busSideTab === t));
   });
   document.getElementById('busTodayPane').hidden = busSideTab !== 'today';
+  document.getElementById('busLivePane').hidden = busSideTab !== 'live';
   document.getElementById('busStopPane').hidden = busSideTab !== 'stop';
   if (busSideTab === 'stop') renderBusPreview();
+  else if (busSideTab === 'live') { busLiveTabSig = ''; renderBusLiveTab(); }
   else { busTodaySig = ''; renderBusToday(); }
+}
+
+// 실시간 탭: 저장된 정류장의 탈 버스만, 노선마다 다가오는 버스(최대 2대)를 곧 오는 순으로.
+// 다가오는 버스가 없는 노선도 '도착 정보 없음'으로 남겨서 저장한 버스가 다 보이게 한다.
+function renderBusLiveTab() {
+  const b = busCfg();
+  const aged = busLive ? Math.max(0, (Date.now() - busLive.at) / 1000) : 0;
+  const sig = [b.stop && b.stop.id, b.take.join(','), busLive && busLive.at, Math.floor(aged / 30), busLiveError, busHasKey()].join('|');
+  if (sig === busLiveTabSig) return;
+  busLiveTabSig = sig;
+  document.getElementById('busLiveTitle').textContent = b.stop ? b.stop.name + (b.stop.no ? ' · ' + b.stop.no : '') : '실시간 도착';
+  const got = busLive ? new Date(busLive.at) : null;
+  document.getElementById('busLiveMeta').textContent = got
+    ? pad(got.getHours()) + ':' + pad(got.getMinutes()) + ':' + pad(got.getSeconds()) + ' 기준 · 1분마다 갱신' : '';
+  const box = document.getElementById('busLiveList');
+  box.innerHTML = '';
+  if (!b.stop) { box.append(busEl('div', 'busempty', '저장된 퇴근 정류장이 없어요.\n지도에서 정류장을 눌러 저장하세요.')); return; }
+  if (!b.take.length) { box.append(busEl('div', 'busempty', '탈 버스가 없어요 — 오늘의 버스 탭에서 정류장 이름을 눌러 체크하세요.')); return; }
+  if (!busLiveCapable(b.stop) || !busHasKey()) {
+    box.append(busEl('div', 'busempty', '이 정류장은 실시간 도착을 볼 수 없어요.\n(경기도 · TAGO 정류장 + 공공데이터포털 키 필요)'));
+    return;
+  }
+  if (!busLive) { box.append(busEl('div', 'busempty', busLiveError ? '실시간 도착 조회 실패: ' + busLiveError : '실시간 도착 불러오는 중…')); return; }
+  const take = new Set(b.take);
+  const rows = b.routes.filter(r => take.has(r.no))
+    .map(r => ({ r, buses: busLive.arrivals.filter(a => busLiveMatch(r, a)).slice(0, 2) }))
+    .sort((x, y) => (x.buses.length ? x.buses[0].sec : Infinity) - (y.buses.length ? y.buses[0].sec : Infinity));
+  rows.forEach(({ r, buses }) => {
+    const row = busEl('div', 'busliverow' + (buses.length ? '' : ' none'));
+    const info = busEl('span', 'busliveinfo');
+    if (!buses.length) info.textContent = '도착 정보 없음';
+    buses.forEach(a => {
+      const min = Math.max(0, Math.round((a.sec - aged) / 60));
+      const at = (Math.round((busLive.base + a.sec) / 60) * 60) % 86400;
+      const el = busEl('span');
+      el.append(busEl('b', '', min ? min + '분' : '곧 도착'), document.createTextNode(fmt24(at) + (a.prev ? ' · ' + a.prev + '정류장 전' : '')));
+      info.append(el);
+    });
+    row.append(busEl('span', 'busno', r.no), busEl('span', 'busroute-meta', r.dest ? r.dest + ' 방면' : ''), info);
+    box.append(row);
+  });
 }
 
 // '배차 10~25분'(출퇴근~평시) / '배차 15분'. 그 요일 배차가 없으면 ''
@@ -1908,8 +1954,10 @@ async function refreshBusLive() {
     busLive = null;
     if (res) setBusStatus('실시간 도착 조회 실패: ' + (res.message || '알 수 없음'), 'err');
   }
+  busLiveError = res && res.status !== 'ok' ? res.message || '알 수 없음' : '';
   busTodaySig = '';
   renderBusToday();
+  renderBusLiveTab();
   if (res && viewMode === 'bus') busLiveTimer = setTimeout(refreshBusLive, 60000);
 }
 
@@ -2484,6 +2532,7 @@ async function init() {
   document.getElementById('busScan').addEventListener('click', scanBusStops);
   document.getElementById('busBuffer').addEventListener('change', onBusBufferChange);
   document.getElementById('busTabToday').addEventListener('click', () => showBusTab('today'));
+  document.getElementById('busTabLive').addEventListener('click', () => showBusTab('live'));
   document.getElementById('busTabStop').addEventListener('click', () => showBusTab('stop'));
   document.getElementById('busPrevSave').addEventListener('click', saveBusPreview);
   document.getElementById('busStopEdit').addEventListener('click', () => { if (busCfg().stop) previewBusStop(busCfg().stop); });

@@ -187,6 +187,18 @@ class GbisTests(BusTestCase):
         with patch.object(bus, "_http_json", side_effect=no_gbis):
             self.assertEqual(bus.arrivals({"id": "gbis:1", "stationId": "1", "source": "gbis"}, "k")["status"], "error")
 
+    def test_saved_gyeonggi_stop_without_station_id_still_gets_live_arrivals(self):
+        # 예전 저장본: stationId · nodeId · cityCode 가 비어 있고 id 에만 정류장 번호가 있다
+        saved = {"id": "gbis:204000158", "name": "텔레칩스", "no": "05341", "source": "gbis",
+                 "cityCode": "", "nodeId": ""}
+        self.assertEqual(bus._gbis_id(saved), "204000158")
+        with patch.object(bus, "_http_json", side_effect=self.fake):
+            res = bus.arrivals(saved, "k")
+        self.assertEqual(res["status"], "ok")
+        self.assertEqual([a["no"] for a in res["arrivals"]], ["310", "310"])
+        self.assertEqual(bus._gbis_id({"source": "gbis", "id": "osm:1"}), "")      # 번호를 알 수 없으면 그대로 미지원
+        self.assertEqual(bus.arrivals({"source": "gbis", "id": "osm:1"}, "k")["status"], "unsupported")
+
     def test_nearby_uses_gyeonggi_then_tago_outside_gyeonggi(self):
         with patch.object(bus, "_http_json", side_effect=self.fake):
             gg = bus.nearby_stops(37.40645, 127.0873667, 450, "k")

@@ -258,6 +258,51 @@ class WorkTimeUI(unittest.TestCase):
         self.page.evaluate("doSave()")
         self.assertEqual(self.page.evaluate("savedState.settings.bus.routes[0].offset"), 7)
 
+    def test_live_tab_lists_only_saved_buses_soonest_first(self):
+        self.page.evaluate("""async () => {
+          window.pywebview = {api: {
+            save: async s => { window.savedState = JSON.parse(JSON.stringify(s)); return true; },
+            bus_tile: async () => null,
+            bus_stop_routes: async () => ({status: 'ok', routes: [
+              {no: '87', id: '241213007', dest: '사기막골', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
+              {no: '310', id: '204000163', dest: '판교역', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
+              {no: '311', id: '204000192', dest: '판교역', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
+            ]}),
+            bus_arrivals: async () => ({status: 'ok', arrivals: [
+              {no: '310', id: '204000163', sec: 60, prev: 1},
+              {no: '311', id: '204000192', sec: 180, prev: 3},
+              {no: '311', id: '204000192', sec: 1140, prev: 13},
+            ]}),
+          }};
+          busDefaultKey = true;
+          document.getElementById('busBtn').click();
+          await previewBusStop({id: 'gbis:204000158', stationId: '204000158', name: '텔레칩스', no: '05341',
+                                lat: 37.40645, lng: 127.0873667, source: 'gbis'});
+          busPreview.take.delete('310');          // 310번은 탈 버스에서 뺀다
+          saveBusPreview();
+        }""")
+        self.page.locator("#busTabLive").click()
+        self.assertTrue(self.page.locator("#busLivePane").is_visible())
+        self.assertTrue(self.page.locator("#busTodayPane").is_hidden())
+        self.assertEqual(self.text("#busLiveTitle"), "텔레칩스 · 05341")
+        self.assertIn("기준 · 1분마다 갱신", self.text("#busLiveMeta"))
+        rows = self.page.locator("#busLiveList .busliverow")
+        # 저장한 탈 버스만(310번 제외) · 곧 오는 순 · 오는 버스가 없는 노선도 남긴다
+        self.assertEqual(rows.locator(".busno").all_text_contents(), ["311", "87"])
+        self.assertEqual(rows.nth(0).locator(".busliveinfo > span").all_text_contents(),
+                         ["3분12:03 · 3정류장 전", "19분12:19 · 13정류장 전"])
+        self.assertEqual(self.text("#busLiveList .busliverow.none .busliveinfo"), "도착 정보 없음")
+        self.page.locator("#busTabToday").click()
+        self.assertTrue(self.page.locator("#busLivePane").is_hidden())
+
+    def test_live_tab_explains_when_stop_has_no_live_arrivals(self):
+        self.page.locator("#busBtn").click()
+        self.page.locator("#busTabLive").click()
+        self.assertIn("저장된 퇴근 정류장이 없어요", self.text("#busLiveList"))
+        self.install_bus_stop()                                       # OSM 정류장: 실시간 미지원
+        self.page.locator("#busTabLive").click()
+        self.assertIn("실시간 도착을 볼 수 없어요", self.text("#busLiveList"))
+
     def test_bus_setup_survives_restart_and_uses_deploy_key(self):
         self.page.evaluate("""async () => {
           window.pywebview = {api: {
@@ -296,6 +341,24 @@ class WorkTimeUI(unittest.TestCase):
         self.assertEqual(again.locator("#busMap path.leaflet-interactive").count(), 2)   # 지난번 찾은 주변 정류장
         self.assertEqual(again.evaluate("[busMap.getZoom(), +busMap.getCenter().lat.toFixed(3)]"), [16, 37.395])
         again.close()
+
+    def test_saved_gyeonggi_stop_keeps_station_id_for_live_arrivals(self):
+        self.page.evaluate("""async () => {
+          window.pywebview = {api: {
+            save: async s => { window.savedState = JSON.parse(JSON.stringify(s)); return true; },
+            bus_tile: async () => null,
+            bus_stop_routes: async () => ({status: 'ok', routes: [
+              {no: '310', id: '233000031', first: '06:00', last: '23:00', iv: {wd: 10}, offset: 0, source: 'gbis'},
+            ]}),
+          }};
+          document.getElementById('busBtn').click();
+          await previewBusStop({id: 'gbis:204000158', stationId: '204000158', name: '텔레칩스', no: '05341',
+                                lat: 37.40645, lng: 127.0873667, source: 'gbis'});
+          saveBusPreview();
+          await doSave();
+        }""")
+        # 경기도 API 정류장은 stationId 만 있다 — 저장에서 빠지면 실시간 도착이 '미지원'이 된다
+        self.assertEqual(self.page.evaluate("savedState.settings.bus.stop.stationId"), "204000158")
 
     def test_gyeonggi_peak_offpeak_weekend_and_saved_tago_stop_migration(self):
         result = self.page.evaluate("""() => {

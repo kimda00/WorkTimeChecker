@@ -458,7 +458,10 @@ def _gbis(path, params, key, list_key):
 def _gbis_id(stop):
     """경기도 정류장 id: 경기도 API 정류장이면 stationId, TAGO 경기도 정류장(GGB…)이면 앞 GGB 를 뗀 값."""
     if stop.get("source") == "gbis":
-        return str(stop.get("stationId") or "")
+        sid, ident = str(stop.get("stationId") or ""), str(stop.get("id") or "")
+        if not sid and ident.startswith("gbis:"):      # stationId 없이 저장된 정류장 — id('gbis:204000158')에 들어 있다
+            sid = ident[len("gbis:"):]
+        return sid
     node = str(stop.get("nodeId") or "")
     return node[3:] if stop.get("source") == "tago" and node.startswith("GGB") else ""
 

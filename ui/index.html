@@ -151,6 +151,7 @@
         <div class="busside">
           <div class="bustabs" role="tablist" aria-label="버스 정보">
             <button id="busTabToday" class="bustab active" type="button" role="tab" aria-selected="true">오늘의 버스</button>
+            <button id="busTabLive" class="bustab" type="button" role="tab" aria-selected="false">실시간</button>
             <button id="busTabStop" class="bustab" type="button" role="tab" aria-selected="false" hidden>정류장</button>
           </div>
           <section id="busTodayPane" class="buscard grow" role="tabpanel">
@@ -162,6 +163,10 @@
             <div id="busSrc" class="bussrc"></div>
             <div id="busLive" class="buslive" hidden></div>
             <div id="busToday" class="buslist"></div>
+          </section>
+          <section id="busLivePane" class="buscard grow" role="tabpanel" hidden>
+            <div class="buscardhead"><strong id="busLiveTitle">실시간 도착</strong><span id="busLiveMeta" class="bussrc"></span></div>
+            <div id="busLiveList" class="buslist"></div>
           </section>
           <section id="busStopPane" class="buscard grow" role="tabpanel" hidden>
             <div class="buscardhead"><strong id="busPrevName"></strong><span id="busPrevMeta" class="bussrc"></span></div>

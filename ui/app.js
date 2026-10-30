@@ -2811,11 +2811,14 @@ let tripPaySrc = '';
 let tripPaydayMonth = 0;
 const TRIP_DEFAULT_RATE = 250;
 const TRIP_DEFAULT_MEAL_CAP = 12000;
+const TRIP_DEFAULT_LOOKBACK = 14;   // 대중교통: 승차권 결제를 찾을 출장 전 일수
 
 function tripSettings() {
   const s = (state && state.settings) || {};
   const cap = parseInt(s.approvalMealCap, 10);
+  const lb = parseInt(s.approvalTripLookback, 10);
   return { rate: parseInt(s.approvalTripRate, 10) || TRIP_DEFAULT_RATE, mealCap: isFinite(cap) && cap >= 0 ? cap : TRIP_DEFAULT_MEAL_CAP,
+           mode: s.approvalTripMode === 'public' ? 'public' : 'car', lookback: isFinite(lb) && lb >= 0 ? lb : TRIP_DEFAULT_LOOKBACK,
            km: (s.approvalTripKm && typeof s.approvalTripKm === 'object') ? s.approvalTripKm : {} };
 }
 // approval.compose_trip_title 과 같은 규칙: 'YY/MM/DD 목적지', 여러 날이면 '~DD' 또는 '~MM/DD'.
@@ -2833,15 +2836,21 @@ function tripInputs() {
   const v = id => (document.getElementById(id)?.value || '').trim();
   const n = id => { const x = parseFloat(v(id).replace(/,/g, '')); return isFinite(x) && x > 0 ? Math.round(x) : 0; };
   const start = v('tripStart');
-  const capRaw = v('tripMealCap');
-  return { start, end: v('tripEnd') || start, dest: v('tripDest'), km: n('tripKm'), rate: n('tripRate') || tripSettings().rate,
-           toll: n('tripToll'), lodging: n('tripLodging'), meals: !!document.getElementById('tripMeals')?.checked,
+  const capRaw = v('tripMealCap'), lbRaw = v('tripLookback');
+  const mode = v('tripMode') === 'public' ? 'public' : 'car';
+  return { start, end: v('tripEnd') || start, dest: v('tripDest'), mode,
+           km: mode === 'car' ? n('tripKm') : 0, rate: n('tripRate') || tripSettings().rate, toll: mode === 'car' ? n('tripToll') : 0,
+           lodging: n('tripLodging'), fare: mode === 'public' ? n('tripFare') : 0,
+           lookback: lbRaw === '' ? tripSettings().lookback : n('tripLookback'),
+           meals: !!document.getElementById('tripMeals')?.checked,
            mealCap: capRaw === '' ? tripSettings().mealCap : n('tripMealCap') };
 }
 function tripRowsText(t) {
   const won = n => n.toLocaleString('ko-KR') + '원';
   const rows = [];
+  if (t.mode === 'public') rows.push('승차권: 출장 ' + t.lookback + '일 전부터의 법인카드 내역 중 버스·철도·항공 결제(폼을 열 때 조회)');
   if (t.meals) rows.push('식대: 출장 기간 법인카드 내역(폼을 열 때 조회' + (t.mealCap ? ', 끼당 ' + won(t.mealCap) + ' 상한' : '') + ')');
+  if (t.fare) rows.push('교통(개인 결제) ' + won(t.fare));
   if (t.km) rows.push('유류대 ' + won(t.km * t.rate) + ' (왕복 ' + t.km + 'km × ' + t.rate + '원)');
   if (t.toll) rows.push('톨비 ' + won(t.toll));
   if (t.lodging) rows.push('숙박 ' + won(t.lodging));
@@ -2904,9 +2913,29 @@ function applyTripKmMemory() {
   const km = tripSettings().km[dest];
   if (inp && km && !inp.value) { inp.value = km; refreshTripSheet(); }
 }
+// 이동 수단에 따라 자차 칸(거리·단가·하이패스)과 대중교통 칸(조회 일수·개인 교통비)을 바꿔 보인다.
+function applyTripMode() {
+  const mode = (document.getElementById('tripMode')?.value === 'public') ? 'public' : 'car';
+  document.querySelectorAll('#approvalPanel label[data-mode]').forEach(l => { l.hidden = l.dataset.mode !== mode; });
+}
 function initTripPanel() {
   const rate = document.getElementById('tripRate');
   if (!rate) return;
+  const modeSel = document.getElementById('tripMode');
+  modeSel.value = tripSettings().mode;
+  modeSel.addEventListener('change', () => {
+    if (state && state.settings) { state.settings.approvalTripMode = modeSel.value === 'public' ? 'public' : 'car'; scheduleSave(); }
+    applyTripMode(); refreshTripSheet();
+  });
+  const lb = document.getElementById('tripLookback');
+  lb.value = tripSettings().lookback;
+  lb.addEventListener('change', () => {
+    const v = parseInt(lb.value, 10);
+    if (state && state.settings) { state.settings.approvalTripLookback = isFinite(v) && v >= 0 ? v : TRIP_DEFAULT_LOOKBACK; scheduleSave(); }
+    lb.value = tripSettings().lookback;
+    refreshTripSheet();
+  });
+  applyTripMode();
   rate.value = tripSettings().rate;
   rate.addEventListener('change', () => {
     if (state && state.settings) { state.settings.approvalTripRate = parseInt(rate.value, 10) || TRIP_DEFAULT_RATE; scheduleSave(); }
@@ -2920,7 +2949,7 @@ function initTripPanel() {
     cap.value = tripSettings().mealCap;
     refreshTripSheet();
   });
-  ['tripStart', 'tripEnd', 'tripDest', 'tripKm', 'tripToll', 'tripLodging', 'tripMeals', 'tripRate', 'tripMealCap'].forEach(id => {
+  ['tripStart', 'tripEnd', 'tripDest', 'tripKm', 'tripToll', 'tripLodging', 'tripMeals', 'tripRate', 'tripMealCap', 'tripFare', 'tripLookback'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.addEventListener('input', refreshTripSheet);
   });
@@ -2956,7 +2985,7 @@ async function openTripForm() {
   if (!t.start) { setTripMsg('출장 시작일을 입력하세요.', 'err'); return; }
   if (!t.dest) { setTripMsg('목적지를 입력하세요.', 'err'); return; }
   if (!name) { setTripMsg('이름(지급처)을 위 지출결의서 칸에 입력하세요.', 'err'); return; }
-  if (!t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없어요 — 거리·톨비·숙박·식대 중 하나는 있어야 해요.', 'err'); return; }
+  if (t.mode === 'car' && !t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없어요 — 거리·톨비·숙박·식대 중 하나는 있어야 해요.', 'err'); return; }
   if (tripPayday == null) await lookupTripPayday();
   if (t.km && state && state.settings) {   // 목적지별 왕복 km 기억
     const km = Object.assign({}, tripSettings().km); km[t.dest] = t.km;
@@ -2965,8 +2994,8 @@ async function openTripForm() {
   const pj = approvalProjectSetting();
   const payload = { form: 'trip', title: tripTitleText(t.start, t.end, t.dest), payee: name, payday: tripPayday || '',
                     project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null,
-                    start: t.start, end: t.end, dest: t.dest, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging, meals: t.meals,
-                    mealCap: t.mealCap };
+                    start: t.start, end: t.end, dest: t.dest, mode: t.mode, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging,
+                    fare: t.fare, lookback: t.lookback, meals: t.meals, mealCap: t.mealCap };
   setApprBusy(true); setTripMsg('출장 폼 여는 중… 열린 창에서 첨부·검토·제출하세요.');
   let res = null;
   try {

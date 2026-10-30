@@ -19,6 +19,9 @@
      비과세로 바꾼다), '행추가'로 유류대·톨비·숙박 개인카드 행을 만들어 기본적요·증빙일자·
      공급가액·상세내용을 채운다. 창이 열려 있는 동안 사용자가 카드내역을 더 눌러 추가한
      행에도 식대 처리를 이어서 한다.
+     대중교통 출장(mode=public)은 출장 전 N일(기본 14)부터의 카드내역에서 버스·철도·항공 결제만
+     승차권으로 골라 6071(교통) 행을 만들고(택시·주차는 6079 제반), 개인 결제 교통비는 6071 개인카드
+     행으로 넣는다. 카드 행 분류는 가맹점명 키워드(config tripTransportKeywords/tripMiscKeywords).
      기본적요는 폼의 팝업이 쓰는 부서별 목록 API(/api/amaranth/accountDept)에서 코드로 고르고,
      지급처·행 거래처(본인)는 거래처 검색 API(/api/amaranth/integration/trade)로 코드를 찾아
      td 의 data-code/data-name 까지 맞춘다(제출 시 읽는 값). 첨부·검토·제출은 사용자 몫.
@@ -41,9 +44,18 @@ DEFAULT_APPROVAL_URL = ORIGIN + "/app/approval/document/new/352/3101"
 DEFAULT_TRIP_FORM_ID = 3279        # 출장비용지급품의(AMARANTH 10) 양식 id
 DEFAULT_FUEL_RATE = 250            # 자차 유류대 단가(원/km)
 DEFAULT_MEAL_CAP = 12000           # 식대 한 끼 상한(원). 0 이면 제한 없음
+DEFAULT_TICKET_LOOKBACK = 14       # 대중교통: 승차권은 출장 며칠 전에 사므로 카드내역 조회를 이만큼 앞당긴다
+# 카드내역 가맹점명으로 행을 분류하는 키워드(대소문자 무시). config.json 의 tripTransportKeywords / tripMiscKeywords 로 덮어쓴다.
+DEFAULT_TRANSPORT_KEYWORDS = ["고속버스", "KOBUS", "코버스", "시외버스", "버스터미널", "버스", "코레일", "KORAIL", "레츠코레일",
+                              "KTX", "SRT", "철도", "기차", "지하철", "대한항공", "아시아나", "제주항공", "진에어", "티웨이",
+                              "에어부산", "에어서울", "이스타", "항공"]
+DEFAULT_MISC_KEYWORDS = ["택시", "카카오T", "카카오 T", "카카오택시", "타다", "TADA", "주차", "파킹", "PARKING", "하이패스",
+                         "톨게이트", "도로공사"]
 # 출장비용지급품의 행에 쓰는 기본적요 코드(그룹웨어 '기본적요' 목록의 rmkNo).
 TRIP_ACCTS = {
     "meal": "6075",      # (용역) 법카 - 출장외근비(식대)
+    "transport": "6071", # (용역) 법카 - 출장외근비(교통) — 승차권(법인카드) · 개인 결제 교통비
+    "misc": "6079",      # (용역) 법카 - 출장외근비(제반-톨비,택시,주차료) — 법인카드 택시·주차
     "fuel": "6377",      # (용역) 개인 - 출장외근비(유류대)
     "toll": "6379",      # (용역) 개인 - 출장외근비(제반-톨비)
     "lodging": "6073",   # (용역) 법카 - 출장외근비(숙박) — 개인 숙박 적요가 없어 개인카드로 쓴다
@@ -90,6 +102,14 @@ def _trip_url():
         return u
     form_id = _config("tripFormId", DEFAULT_TRIP_FORM_ID)
     return re.sub(r"/\d+/?$", "/%s" % form_id, _approval_url())
+
+
+def _card_keywords():
+    """카드 행 분류 키워드 {transport:[..], misc:[..]} (config 로 덮어쓰기 가능)."""
+    tr = _config("tripTransportKeywords")
+    ms = _config("tripMiscKeywords")
+    return {"transport": list(tr) if isinstance(tr, list) and tr else DEFAULT_TRANSPORT_KEYWORDS,
+            "misc": list(ms) if isinstance(ms, list) and ms else DEFAULT_MISC_KEYWORDS}
 
 
 def _dept_from_url(url):
@@ -224,15 +244,19 @@ def compose_trip_title(start, end="", dest=""):
 
 def trip_rows(payload):
     """출장 입력 → 개인카드 전표 행 [{kind, acct, amount, date, detail}].
-    유류대 = 왕복 km × 단가(기본 250원), 톨비·숙박은 금액 그대로. 0 이면 행을 만들지 않는다.
+    개인 결제 교통비(fare, 6071) · 유류대 = 왕복 km × 단가(기본 250원) · 톨비 · 숙박은 금액 그대로. 0 이면 행을 만들지 않는다.
     식대(법인카드)는 카드내역 팝업에서 가져오므로 여기 없다."""
     payload = payload or {}
     km = _num(payload.get("km"))
     rate = _num(payload.get("rate")) or DEFAULT_FUEL_RATE
     toll = _num(payload.get("toll"))
     lodging = _num(payload.get("lodging"))
+    fare = _num(payload.get("fare"))
     date = (payload.get("start") or "")[:10]
     rows = []
+    if fare > 0:
+        rows.append({"kind": "fare", "acct": TRIP_ACCTS["transport"], "amount": fare, "date": date,
+                     "detail": "출장 교통비(개인 결제 승차권)"})
     if km > 0:
         rows.append({"kind": "fuel", "acct": TRIP_ACCTS["fuel"], "amount": km * rate, "date": date,
                      "detail": "왕복 %dkm(자차 이용)" % km})
@@ -451,41 +475,53 @@ _ROW_FILL_JS = r"""
 };
 """
 
-# 카드내역으로 들어온 행(corp_card_row) 중 아직 처리하지 않은 것(data-wt-meal 없음)에:
-#  - 기본적요가 비었으면 식대 적요(6075) data-* 와 표시값
-#  - 상세내용이 비었으면 승인시간으로 '출장외근비 - 아침/점심/저녁식대' (10:30 전 아침, 15:30 전 점심, 그 뒤 저녁)
-#  - 합계가 상한(cap)을 넘으면 공급가액을 상한으로 바꾸고 change 를 쏜다 → 폼이 부가세 0 · 법인카드(비과세)로 정리
-_MEAL_ROWS_JS = r"""
+# 카드내역으로 들어온 행(corp_card_row) 중 아직 처리하지 않은 것(data-wt-meal 없음)을 가맹점명으로 분류해 채운다:
+#  - 제반 키워드(택시·주차…) → x.misc(6079), 상세 '출장외근비 - 제반(가맹점)'
+#  - 교통 키워드(버스·철도·항공…) → x.transport(6071), 상세 '출장외근비 - 교통(가맹점)'
+#  - 그 외 → x.meal(6075), 승인시간으로 '출장외근비 - 아침/점심/저녁식대' (10:30 전 아침, 15:30 전 점심, 그 뒤 저녁),
+#    합계가 상한(cap)을 넘으면 공급가액을 상한으로 바꾸고 change → 폼이 부가세 0 · 법인카드(비과세)로 정리
+# 기본적요·상세내용은 비어 있을 때만 넣는다(직접 고른 값은 유지).
+_CARD_ROWS_JS = r"""
 (x) => {
-  let n = 0, capped = 0; const a = x.acct, cap = Number(x.cap) || 0;
+  let n = 0, capped = 0; const cap = Number(x.cap) || 0; const kw = x.keywords || {};
   const num = s => Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
+  const up = s => String(s || '').toUpperCase();
+  const hit = (name, list) => (list || []).some(k => k && up(name).includes(up(k)));
   const mealOf = t => { const p = String(t || '').split(':'); const h = parseInt(p[0], 10), m = parseInt(p[1], 10) || 0; if (isNaN(h)) return '식대';
     const mins = h * 60 + m; return mins < 10 * 60 + 30 ? '아침식대' : (mins < 15 * 60 + 30 ? '점심식대' : '저녁식대'); };
+  const setAcct = (td, a) => {
+    const inp = td.querySelector('input'); if (!inp) return;
+    inp.value = a.rmkNo + ' / ' + a.rmk;
+    const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
+      'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
+      'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
+    for (const k in attrs) td.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
+  };
   document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').forEach(tr1 => {
     if (tr1.getAttribute('data-wt-meal')) return;
     const tr2 = tr1.nextElementSibling, tr3 = tr2 && tr2.nextElementSibling;
     if (!tr2 || !tr3) return;
+    const chain = ((tr2.querySelector('.dztrade input') || {}).value || '').trim();
+    const kind = hit(chain, kw.misc) ? 'misc' : (hit(chain, kw.transport) ? 'transport' : 'meal');
+    const acct = x[kind];
     const rmkTd = tr1.querySelector('.debitRmk'), rmkIn = rmkTd && rmkTd.querySelector('input');
-    if (a && rmkIn && !(rmkIn.value || '').trim()) {
-      rmkIn.value = a.rmkNo + ' / ' + a.rmk;
-      const attrs = { 'data-id': a.id, 'data-code': a.rmkNo, 'data-name': a.rmk,
-        'data-cr_acct': a.crAcctCode, 'data-cr_acct_name': a.crAcctName, 'data-dr_acct': a.drAcctCode, 'data-dr_acct_name': a.drAcctName,
-        'data-vat_acct': a.vatAcctCode, 'data-vat_acct_name': a.vatAcctName, 'data-vat_crdr': a.vatAcctCrdr };
-      for (const k in attrs) rmkTd.setAttribute(k, attrs[k] == null ? '' : String(attrs[k]));
-    }
+    if (acct && rmkIn && !(rmkIn.value || '').trim()) setAcct(rmkTd, acct);
     const sm = tr3.querySelector('.summary input');
     if (sm && !(sm.value || '').trim()) {
-      sm.value = '출장외근비 - ' + mealOf((tr1.querySelector('.apprTime input') || {}).value);
+      sm.value = kind === 'misc' ? '출장외근비 - 제반(' + chain + ')' : kind === 'transport' ? '출장외근비 - 교통(' + chain + ')'
+               : '출장외근비 - ' + mealOf((tr1.querySelector('.apprTime input') || {}).value);
       sm.dispatchEvent(new Event('change', { bubbles: true }));
     }
-    const tot = num((tr2.querySelector('.valueOfTot') || {}).textContent);
-    const sup = tr2.querySelector('.valueOfSupply input');
-    if (cap > 0 && sup && tot > cap) {
-      sup.value = cap.toLocaleString('en-US');
-      sup.dispatchEvent(new Event('change', { bubbles: true }));
-      capped++;
+    if (kind === 'meal') {
+      const tot = num((tr2.querySelector('.valueOfTot') || {}).textContent);
+      const sup = tr2.querySelector('.valueOfSupply input');
+      if (cap > 0 && sup && tot > cap) {
+        sup.value = cap.toLocaleString('en-US');
+        sup.dispatchEvent(new Event('change', { bubbles: true }));
+        capped++;
+      }
     }
-    tr1.setAttribute('data-wt-meal', '1');
+    tr1.setAttribute('data-wt-meal', kind);
     n++;
   });
   return { rows: n, capped };
@@ -502,18 +538,33 @@ _CARD_DATES_JS = r"""
   return true;
 };
 """
-_CARD_CHECK_ALL_JS = r"""
-() => {
-  const cbs = document.querySelectorAll('#dataList tbody .dataTd input[type=checkbox]');
-  cbs.forEach(c => { c.checked = true; c.setAttribute('checked', 'checked'); });
-  return cbs.length;
+# 조회 결과 중 가져올 행만 체크. f = {from, to, all, transport, meals, keywords}
+#  all: 출장 기간(from~to) 안의 내역 전부(자차 출장)
+#  transport: 가맹점명이 교통 키워드(버스·철도·항공)면 기간 어디든(승차권은 미리 산다)
+#  meals: 교통이 아닌 내역 중 출장 기간 안의 것(식대)
+_CARD_CHECK_JS = r"""
+(f) => {
+  const up = s => String(s || '').toUpperCase();
+  const isTr = name => (f.keywords || []).some(k => k && up(name).includes(up(k)));
+  let n = 0;
+  document.querySelectorAll('#dataList tbody tr').forEach(tr => {
+    const cb = tr.querySelector('.dataTd input[type=checkbox]'); if (!cb) return;
+    const chain = ((tr.querySelector('.chainName') || {}).textContent || '').trim();
+    const dt = ((tr.querySelector('.issDt') || {}).textContent || '').trim();
+    const inTrip = (!f.from || dt >= f.from) && (!f.to || dt <= f.to);
+    const tr_ = isTr(chain);
+    const take = f.all ? inTrip : ((f.transport && tr_) || (f.meals && inTrip && !tr_));
+    if (!take) return;
+    cb.checked = true; cb.setAttribute('checked', 'checked'); n++;
+  });
+  return n;
 };
 """
 
 
-def _add_card_rows(page, start, end):
-    """'카드내역' 팝업으로 start~end(YYYY-MM-DD) 의 법인카드 사용내역을 모두 전표 행으로 가져온다.
-    페이지 안에서만 일어나는 일(제출 아님). {found, added} 또는 {error}."""
+def _add_card_rows(page, start, end, pick=None):
+    """'카드내역' 팝업으로 start~end(YYYY-MM-DD) 의 법인카드 사용내역을 조회해 pick(_CARD_CHECK_JS 의 f) 에 맞는 행을
+    체크해 전표 행으로 가져온다. pick 이 없으면 전부. 페이지 안에서만 일어나는 일(제출 아님). {found, added} 또는 {error}."""
     out = {"found": 0, "added": 0}
     btn = page.locator("#corpCardUsagePopupBtn")
     if not btn.count() or not btn.first.is_visible():
@@ -530,7 +581,7 @@ def _add_card_rows(page, start, end):
     except Exception:
         pass
     page.wait_for_timeout(1200)
-    n = page.evaluate(_CARD_CHECK_ALL_JS)
+    n = page.evaluate(_CARD_CHECK_JS, pick or {"all": True})
     out["found"] = int(n or 0)
     popup = page.locator("#corpCardUsagePopup")
     if out["found"]:
@@ -582,10 +633,15 @@ def prefill(payload):
 
 def prefill_trip(payload):
     """출장비용지급품의 폼을 열어 제목·지급처·지급요청일 + 식대(카드내역) + 유류대·톨비·숙박 행을 채운다.
-    payload: {title?, payee, payday, project, start, end, dest, km, rate, toll, lodging, meals, mealCap}.
+    payload: {title?, payee, payday, project, start, end, dest, mode, km, rate, toll, lodging, fare, lookback, meals, mealCap}.
+    mode 'car'(기본): 출장 기간의 카드내역 전부(식대) + 유류대·톨비 행. 'public': 출장 lookback일 전부터의 카드내역에서
+    승차권(교통 키워드)과 출장 기간 식대만 골라 오고 개인 결제 교통비(fare) 행.
     mealCap(기본 12,000, 0 이면 제한 없음)을 넘는 식대 행은 공급가액을 상한으로 깎는다."""
     payload = dict(payload or {})
     meal_cap = _num(payload["mealCap"]) if "mealCap" in payload else DEFAULT_MEAL_CAP
+    mode = "public" if (payload.get("mode") or "car") == "public" else "car"
+    lookback = (_num(payload["lookback"]) if "lookback" in payload else DEFAULT_TICKET_LOOKBACK) if mode == "public" else 0
+    keywords = _card_keywords()
     if not (payload.get("title") or "").strip():
         payload["title"] = compose_trip_title(payload.get("start"), payload.get("end"), payload.get("dest"))
     rows = trip_rows(payload)
@@ -593,9 +649,14 @@ def prefill_trip(payload):
     end = (payload.get("end") or start)[:10] or start
 
     def steps(page, ctx, filled, dept, trade):
-        if payload.get("meals") and start:
+        want_meals = bool(payload.get("meals"))
+        if (want_meals or mode == "public") and start:
             try:
-                filled["cards"] = _add_card_rows(page, start, end)
+                range_start = (datetime.date.fromisoformat(start) - datetime.timedelta(days=lookback)).isoformat()
+                pick = {"from": start, "to": end, "all": mode != "public", "transport": mode == "public",
+                        "meals": want_meals, "keywords": keywords["transport"]}
+                filled["cards"] = _add_card_rows(page, range_start, end, pick)
+                filled["cards"]["range"] = [range_start, end]
             except Exception as e:
                 filled["cards"] = {"error": str(e)}
         try:
@@ -603,14 +664,14 @@ def prefill_trip(payload):
         except Exception as e:
             accts = {}
             filled["acctError"] = str(e)
-        meal = accts.get(TRIP_ACCTS["meal"])
-        meal_arg = {"acct": meal, "cap": meal_cap}
+        card_arg = {"meal": accts.get(TRIP_ACCTS["meal"]), "transport": accts.get(TRIP_ACCTS["transport"]),
+                    "misc": accts.get(TRIP_ACCTS["misc"]), "keywords": keywords, "cap": meal_cap}
         filled["mealRows"] = 0
         filled["mealCapped"] = 0
 
         def meal_tick():
-            """카드내역 행에 식대 적요·상세·상한 적용. 창이 열려 있는 동안 반복해 사용자가 더 넣은 행도 처리."""
-            r = page.evaluate(_MEAL_ROWS_JS, meal_arg) or {}
+            """카드내역 행을 교통/제반/식대로 분류해 적요·상세·상한 적용. 창이 열려 있는 동안 반복해 사용자가 더 넣은 행도 처리."""
+            r = page.evaluate(_CARD_ROWS_JS, card_arg) or {}
             filled["mealRows"] += int(r.get("rows") or 0)
             filled["mealCapped"] += int(r.get("capped") or 0)
 

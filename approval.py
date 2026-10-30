@@ -44,7 +44,7 @@ DEFAULT_APPROVAL_URL = ORIGIN + "/app/approval/document/new/352/3101"
 DEFAULT_TRIP_FORM_ID = 3279        # 출장비용지급품의(AMARANTH 10) 양식 id
 DEFAULT_FUEL_RATE = 250            # 자차 유류대 단가(원/km)
 DEFAULT_MEAL_CAP = 12000           # 식대 한 끼 상한(원). 0 이면 제한 없음
-DEFAULT_TICKET_LOOKBACK = 14       # 대중교통: 승차권은 출장 며칠 전에 사므로 카드내역 조회를 이만큼 앞당긴다
+DEFAULT_TICKET_LOOKBACK = 60       # 대중교통: 승차권은 출장 며칠 전에 사므로 카드내역 조회를 이만큼 앞당긴다(교통 키워드 결제만 가져오므로 넉넉히)
 # 카드내역 가맹점명으로 행을 분류하는 키워드(대소문자 무시). config.json 의 tripTransportKeywords / tripMiscKeywords 로 덮어쓴다.
 DEFAULT_TRANSPORT_KEYWORDS = ["고속버스", "KOBUS", "코버스", "시외버스", "버스터미널", "버스", "코레일", "KORAIL", "레츠코레일",
                               "KTX", "SRT", "철도", "기차", "지하철", "대한항공", "아시아나", "제주항공", "진에어", "티웨이",
@@ -633,14 +633,14 @@ def prefill(payload):
 
 def prefill_trip(payload):
     """출장비용지급품의 폼을 열어 제목·지급처·지급요청일 + 식대(카드내역) + 유류대·톨비·숙박 행을 채운다.
-    payload: {title?, payee, payday, project, start, end, dest, mode, km, rate, toll, lodging, fare, lookback, meals, mealCap}.
-    mode 'car'(기본): 출장 기간의 카드내역 전부(식대) + 유류대·톨비 행. 'public': 출장 lookback일 전부터의 카드내역에서
+    payload: {title?, payee, payday, project, start, end, dest, mode, km, rate, toll, lodging, fare, meals, mealCap}.
+    mode 'car'(기본): 출장 기간의 카드내역 전부(식대) + 유류대·톨비 행. 'public': 출장 tripTicketLookback일(기본 60) 전부터의 카드내역에서
     승차권(교통 키워드)과 출장 기간 식대만 골라 오고 개인 결제 교통비(fare) 행.
     mealCap(기본 12,000, 0 이면 제한 없음)을 넘는 식대 행은 공급가액을 상한으로 깎는다."""
     payload = dict(payload or {})
     meal_cap = _num(payload["mealCap"]) if "mealCap" in payload else DEFAULT_MEAL_CAP
     mode = "public" if (payload.get("mode") or "car") == "public" else "car"
-    lookback = (_num(payload["lookback"]) if "lookback" in payload else DEFAULT_TICKET_LOOKBACK) if mode == "public" else 0
+    lookback = max(0, int(_num(_config("tripTicketLookback", DEFAULT_TICKET_LOOKBACK)))) if mode == "public" else 0
     keywords = _card_keywords()
     if not (payload.get("title") or "").strip():
         payload["title"] = compose_trip_title(payload.get("start"), payload.get("end"), payload.get("dest"))

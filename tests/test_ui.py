@@ -581,7 +581,8 @@ class WorkTimeUI(unittest.TestCase):
         self.assertEqual((p['form'], p['title'], p['payee'], p['payday']), ('trip', '26/10/28~29 대전 한수원', '김다영', '2026-11-23'))
         self.assertEqual((p['start'], p['end'], p['dest']), ('2026-10-28', '2026-10-29', '대전 한수원'))
         self.assertEqual((p['km'], p['rate'], p['toll'], p['lodging'], p['meals'], p['mealCap']), (278, 250, 7500, 0, True, 12000))
-        self.assertEqual((p['mode'], p['fare'], p['lookback']), ('car', 0, 14))
+        self.assertEqual((p['mode'], p['fare']), ('car', 0))
+        self.assertNotIn('lookback', p)
         self.assertIsNone(p['project'])
         self.assertEqual(self.text('#tripPayday'), '2026-11-23')
         self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripKm")
@@ -591,22 +592,18 @@ class WorkTimeUI(unittest.TestCase):
         pick.select_option('')
         pick.select_option('0')
         self.assertEqual(self.page.locator('#tripKm').input_value(), '278')
-        # 대중교통: 자차 칸이 숨고 승차권 조회 일수·개인 교통비 칸이 보인다. 거리·톨비는 보내지 않는다.
+        # 대중교통: 자차 칸이 숨고 개인 교통비 칸이 보인다. 거리·톨비는 보내지 않는다.
         self.page.locator('#tripMode').select_option('public')
         self.assertTrue(self.page.locator('#tripKm').is_hidden())
-        self.assertTrue(self.page.locator('#tripLookback').is_visible())
-        self.assertEqual(self.page.locator('#tripLookback').input_value(), '14')
-        self.page.locator('#tripLookback').fill('7')
-        self.page.locator('#tripLookback').dispatch_event('change')
         self.page.locator('#tripFare').fill('16900')
-        self.assertIn('승차권: 출장 7일 전부터의 법인카드 내역 중 버스·철도·항공 결제', self.text('#tripRows'))
+        self.assertIn('승차권: 출장 전 두 달치 법인카드 내역 중 버스·철도·항공 결제', self.text('#tripRows'))
         self.assertIn('교통(개인 결제) 16,900원', self.text('#tripRows'))
         self.assertNotIn('유류대', self.text('#tripRows'))
         self.page.locator('#tripOpen').click()
         self.page.wait_for_function("apprCalls.filter(c => c[0] === 'prefill').length === 2")
         p = self.page.evaluate('apprCalls')[-1][1]
-        self.assertEqual((p['mode'], p['fare'], p['lookback'], p['km'], p['toll'], p['meals']), ('public', 16900, 7, 0, 0, True))
-        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripMode === 'public' && window.savedSettings.approvalTripLookback === 7")
+        self.assertEqual((p['mode'], p['fare'], p['km'], p['toll'], p['meals']), ('public', 16900, 0, 0, True))
+        self.page.wait_for_function("window.savedSettings && window.savedSettings.approvalTripMode === 'public'")
 
     def test_approval_base_project_is_resolved_saved_and_sent_with_prefill(self):
         self.page.evaluate("""() => {

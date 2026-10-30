@@ -26,3 +26,6 @@ Thumbs.db
 
 ttree_debug_profile/
 tup
+
+# 퇴근 버스 정류장 캐시 (OSM 조회 결과)
+bus/

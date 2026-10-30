@@ -38,6 +38,7 @@ $pyinstallerArgs = @(
   "--hidden-import", "ehr",
   "--hidden-import", "meal",
   "--hidden-import", "cal",
+  "--hidden-import", "bus",
   "--hidden-import", "ttree",
   "--hidden-import", "approval",
   "--hidden-import", "pystray._win32",

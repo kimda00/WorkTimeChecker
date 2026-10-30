@@ -198,6 +198,8 @@ function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', t);
   const btn = document.getElementById('themeBtn');
   if (btn) btn.textContent = (t === 'excel') ? '다크' : '엑셀';   // 누르면 갈 테마를 라벨로
+  applyBusTiles();      // 지도 타일도 테마에 맞춰(다크/밝은) 교체
+  renderBusMarkers();
 }
 function toggleTheme() {
   const next = (state.settings.theme === 'excel') ? 'dark' : 'excel';
@@ -242,7 +244,11 @@ function effType(cell, dayStr) {
 }
 function ecell(cell, dayStr) {
   const t = effType(cell, dayStr);
-  return (t === cell.type) ? cell : Object.assign({}, cell, { type: t });
+  const busOut = busPlannedOut(cell, t);
+  if (t === cell.type && busOut === null) return cell;
+  const e = Object.assign({}, cell, { type: t });
+  if (busOut !== null) e.out = fmtClock(busOut);   // 퇴근 버스 '도착 N분 전'을 예정 퇴근으로
+  return e;
 }
 
 // 반차 인정 시간(크레딧). 오전/오후 반차(무급 포함) = 4h 자동 인정.
@@ -412,7 +418,7 @@ function renderEstimatedCheckoutCells(estimates) {
 function buildGrid() {
   const head = document.getElementById('headRow');
   head.innerHTML = '<th class="snum">1</th><th class="corner"></th>';   // snum = 엑셀 테마의 행번호 거터
-  for (const tr of ['rowType', 'rowIn', 'rowOut', 'rowWork', 'rowEstOut']) {
+  for (const tr of ['rowType', 'rowIn', 'rowOut', 'rowWork', 'rowEstOut', 'rowBus']) {
     const row = document.getElementById(tr);
     // 앞쪽 고정 th(행번호 + rowlabel) 2개만 남기고 제거
     while (row.children.length > 2) row.removeChild(row.lastChild);
@@ -482,6 +488,17 @@ function buildGrid() {
     tdEst.dataset.day = key;
     if (isToday) tdEst.classList.add('today');
     document.getElementById('rowEstOut').appendChild(tdEst);
+
+    const tdBus = document.createElement('td');
+    if (isToday) tdBus.classList.add('today');
+    const busBtn = document.createElement('button');
+    busBtn.type = 'button';
+    busBtn.className = 'buscell';
+    busBtn.dataset.day = key;
+    busBtn.setAttribute('aria-label', label + '요일 퇴근 버스');
+    busBtn.addEventListener('click', () => openBusPicker(key, busBtn));
+    tdBus.appendChild(busBtn);
+    document.getElementById('rowBus').appendChild(tdBus);
   });
 
   // bind events
@@ -584,6 +601,7 @@ function recompute() {
 
   // 근무 시간 셀
   updateDefaultInHints(wk);
+  updateBusOutHints(wk);
   document.querySelectorAll('#rowWork td').forEach(td => {
     const key = td.dataset.day;
     const idx = DAYS.findIndex(d => d[0] === key);
@@ -619,6 +637,12 @@ function recompute() {
   setWeeklyProgress('progressNow', nowTotal, wTgt);
   setWeeklyProgress('progressPlan', planTotal, wTgt);
   renderEstimatedCheckoutCells(estimates);
+  renderBusCells(mondayKey, wk, estimates);
+  if (viewMode === 'bus') {
+    renderBusToday();
+    if (busSideTab === 'live') renderBusLiveTab();
+    if (busSideTab === 'stop' && busPreview && busPreview.min !== Math.floor(now / 60)) renderBusPreview();   // 분이 바뀔 때만
+  }
 }
 
 /* ---------------- EHR ---------------- */
@@ -732,14 +756,16 @@ function ehrButtonClick() {
 window.appRefreshEhr = function () { refreshEhr(false); };
 
 /* ---------------- 화면 전환 ---------------- */
-// 한 창 안에서 근무·식단·캘린더·TTree·결재 화면을 서로 배타적으로 전환한다.
-let viewMode = 'work';   // 'work' | 'meal' | 'cal' | 'ttree' | 'approval'
+// 한 창 안에서 근무·버스·식단·캘린더·TTree·결재 화면을 서로 배타적으로 전환한다.
+let viewMode = 'work';   // 'work' | 'bus' | 'meal' | 'cal' | 'ttree' | 'approval'
 let mealCacheLoaded = false;
 
 function setView(mode) {
   viewMode = mode;
+  closeBusPicker();
   const wrap = document.querySelector('.wrap');
   if (wrap) {
+    wrap.classList.toggle('bus-mode', mode === 'bus');
     wrap.classList.toggle('meal-mode', mode === 'meal');
     wrap.classList.toggle('cal-mode', mode === 'cal');
     wrap.classList.toggle('ttree-mode', mode === 'ttree');
@@ -764,6 +790,8 @@ function selectView(mode) {
     enterCal();
   } else if (mode === 'ttree') {
     enterTtree();
+  } else if (mode === 'bus') {
+    enterBus();
   } else if (mode === 'approval') {
     if (!approvalInit) { approvalInit = true; initApprovalPanel(); }
     refreshApprovalSheet();
@@ -1173,6 +1201,800 @@ function calGoMonth(mm) {
   renderCalGrid();
   loadCalCache();                 // 해당 달 캐시 있으면 즉시 표시
   scheduleCalFetch(350);          // 연타가 멈춘 뒤에 한 번만 최신 조회
+}
+
+/* ---------------- 퇴근 버스 ---------------- */
+// 퇴근 정류장의 노선 프로필(첫차·막차·요일별 배차·정류장 오프셋 — bus.py)로 그날 도착 시각을 만들고
+// '도착 N분 전'을 그날의 예정 퇴근으로 쓴다. 고른 버스는 요일 칸에 { route, at } 로 저장되고
+// 실제 퇴근(EHR · 직접 입력)이 있으면 그 값이 우선한다. 예정 퇴근은 ecell() 을 거쳐 주간 누적 ·
+// 다른 요일 예상 퇴근 계산에 그대로 반영된다.
+const BUS_DEFAULT_CENTER = [37.5665, 126.978];     // 정류장 미설정 시 지도 시작점(서울시청)
+const BUS_OFF_TYPES = ['연차', '휴일', '공휴일', '오후반차'];   // 퇴근 버스가 필요 없는 날
+const BUS_SOURCE_LABEL = { demo: '데모 배차(추정)', osm: 'OSM 배차', tago: 'TAGO 배차', 'tago+demo': 'TAGO+추정 배차', gbis: '경기도 배차' };
+// 출퇴근(peak) 배차를 쓰는 시간대 — 기점 출발 기준. 경기도 API 노선은 출퇴근/평시 배차가 따로 있다.
+const BUS_PEAK = [[7 * 3600, 9 * 3600], [17 * 3600, 20 * 3600]];
+const DOW = '일월화수목금토';
+
+let busMap = null;
+let busTiles = null;
+let busLayer = null;
+let busStops = [];            // 지도에 표시 중인 정류장 후보
+let busBusy = false;
+let busLive = null;           // { at: ms, arrivals: [{no, sec, prev}] } — TAGO 실시간 도착
+let busLiveTimer = null;
+let busTodaySig = '';         // 오늘의 버스 목록 재렌더 판단(분 · 설정 · 선택이 바뀔 때만)
+let busPopDay = null;         // 열린 선택 팝업의 요일 키
+let busDefaultKey = false;    // config.json 에 배포 기본 키가 있는지(값은 모름)
+let busPreview = null;        // 지도에서 누른(아직 저장 전) 정류장: { stop, saved, routes, take:Set, live, loading, … }
+let busPreviewSeq = 0;        // 미리보기 요청 순번(그새 다른 정류장을 누르면 이전 응답 폐기)
+let busSideTab = 'today';     // 오른쪽 열 탭: 'today' | 'live' | 'stop'
+let busLiveError = '';        // 마지막 실시간 조회 실패 사유(성공 · 미조회면 '')
+let busLiveTabSig = '';       // 실시간 탭 재렌더 판단(받은 시각 · 30초 경과 · 설정이 바뀔 때만)
+
+function busCfg() {
+  const b = state.settings.bus || (state.settings.bus = {});
+  if (!Array.isArray(b.routes)) b.routes = [];
+  if (!Array.isArray(b.take)) b.take = b.routes.map(r => r.no);
+  if (!(b.bufferMin >= 0)) b.bufferMin = 5;          // 기본: 버스 도착 5분 전 퇴근
+  return b;
+}
+function busBufferSec() { return busCfg().bufferMin * 60; }
+function busDayKind(date) {
+  const dow = date.getDay();
+  if (dow === 0 || holidayMap[ymd(date)]) return 'sun';    // 일요일 · 공휴일 배차
+  return dow === 6 ? 'sat' : 'wd';
+}
+// 노선 하나의 그날 이 정류장 도착 시각(초): 첫차~막차를 배차 간격으로 + 기점→정류장 소요.
+// span(토·일 첫차/막차) · ivOff(평시 배차)는 경기도 API 노선에만 있다 — 없으면 하루 한 가지 배차.
+function busRouteTimes(route, date) {
+  const kind = busDayKind(date);
+  const span = (route.span && route.span[kind]) || route;
+  const first = parseTimeToSec(span.first), last = parseTimeToSec(span.last);
+  if (first === null || last === null) return [];
+  const iv = route.iv || {}, ivOff = route.ivOff;
+  if (ivOff && !iv[kind] && !ivOff[kind]) return [];          // 그 요일 배차 0 = 운행 안 함(주말 쉬는 마을버스 등)
+  const peak = Math.max(3, iv[kind] || iv.wd || 15) * 60;
+  const calm = ivOff ? Math.max(3, ivOff[kind] || ivOff.wd || peak / 60) * 60 : peak;
+  const end = last < first ? last + 86400 : last;            // 자정 넘는 막차
+  const off = (route.offset || 0) * 60;
+  const out = [];
+  for (let t = first; t <= end; t += BUS_PEAK.some(([a, z]) => t % 86400 >= a && t % 86400 < z) ? peak : calm) out.push(t + off);
+  if (out[out.length - 1] < end + off - 60) out.push(end + off);      // 막차는 배차 간격과 상관없이 그 시각에 있다
+  return out;
+}
+// 노선 하나의 그날 도착 시각 [{at, live}]. 실시간으로 보이는 구간은 실제 도착 예정으로 바꾼다
+// (그 사이 시간표상 버스는 실제로 없다 — 밤엔 배차가 대표값보다 김). liveFn: busLiveTimes() 결과.
+function busTimesWithLive(r, date, liveFn) {
+  let times = busRouteTimes(r, date);
+  const obs = liveFn ? liveFn(r) : [];
+  if (obs.length) {
+    const until = obs[obs.length - 1] + (times.length > 1 ? (times[1] - times[0]) / 2 : 0);
+    times = obs.concat(times.filter(t => t > until));
+  }
+  return times.map(at => ({ at, live: obs.includes(at) }));
+}
+// 그날 탈 수 있는 버스(체크한 노선) 도착순. leave = 도착 − N분 = 그 버스를 타려면 나서야 하는 시각.
+function busArrivalsOn(date) {
+  const b = busCfg();
+  const take = new Set(b.take);
+  const buf = busBufferSec();
+  const live = busLiveTimes(busLive, date);
+  const list = [];
+  b.routes.filter(r => take.has(r.no)).forEach(r => {
+    busTimesWithLive(r, date, live).forEach(t => list.push({ route: r.no, at: t.at, leave: t.at - buf, live: t.live }));
+  });
+  return list.sort((x, y) => x.at - y.at || x.route.localeCompare(y.route));
+}
+// 노선 맞추기: TAGO 경기도 노선 id 는 'GGB' + 경기도 routeId 라서 앞 GGB 를 떼고 비교한다.
+function busLiveMatch(r, a) {
+  const id = x => String(x || '').replace(/^GGB/, '');
+  return r.id && a.id ? id(a.id) === id(r.id) : a.no === r.no;
+}
+function busLiveCapable(stop) { return !!stop && (stop.source === 'tago' || stop.source === 'gbis'); }
+// TAGO 로 저장했던 경기도 정류장(GGB…)을 경기도 API 정류장 모양으로 — 지도 표시 · 저장 여부 비교용(TAGO 필드도 유지)
+function busGbisShape(s) {
+  const m = s && s.source === 'tago' && /^GGB(\d+)$/.exec(s.nodeId || '');
+  return m ? Object.assign({}, s, { id: 'gbis:' + m[1], stationId: m[1], source: 'gbis' }) : s;
+}
+// 오늘 · 3분 안에 받은 실시간 도착만 쓴다: 노선 → 정류장 도착 예정(초, 분 단위) 목록
+function busLiveTimes(live, date) {
+  if (!live || ymd(date) !== ymd(new Date()) || Date.now() - live.at > 180000) return null;
+  return r => [...new Set(live.arrivals.filter(a => busLiveMatch(r, a))
+    .map(a => Math.round((live.base + a.sec) / 60) * 60))].sort((x, y) => x - y);
+}
+// 근무 목표를 채운 시각(need) 이후 처음 탈 수 있는 버스
+function busRecommend(list, need) {
+  if (need === null || need === undefined) return null;
+  return list.find(x => x.leave >= need) || null;
+}
+function busPlannedOut(cell, type) {
+  if (!cell.bus || parseTimeToSec(cell.out) !== null || BUS_OFF_TYPES.includes(type)) return null;
+  const at = parseTimeToSec(cell.bus.at);
+  return at === null ? null : Math.max(0, at - busBufferSec());
+}
+// 이 요일의 버스 선택만 빼고 계산한 예상 퇴근 = 그날 나서도 되는 가장 이른 시각(다른 요일 선택은 반영).
+function busNeedSec(mondayKey, dayKey) {
+  const wk = weekData(mondayKey);
+  const probe = Object.assign({}, wk, { [dayKey]: Object.assign({}, wk[dayKey], { bus: null }) });
+  const est = estimateCheckouts(probe, state.settings, mondayKey, nowSec())[dayKey];
+  return est === undefined ? null : est;
+}
+function busDateOf(mondayKey, dayKey) {
+  return addDays(new Date(mondayKey + 'T00:00:00'), DAYS.findIndex(d => d[0] === dayKey));
+}
+function busDayLabel(date) {
+  return DOW[date.getDay()] + ' ' + (date.getMonth() + 1) + '/' + date.getDate();
+}
+function busIsPicked(pick, x) {
+  return !!pick && pick.route === x.route && parseTimeToSec(pick.at) === x.at;
+}
+function busEl(tag, cls, text) {
+  const el = document.createElement(tag);
+  if (cls) el.className = cls;
+  if (text !== undefined) el.textContent = text;
+  return el;
+}
+
+function setDayBus(mondayKey, dayKey, x) {
+  const cell = weekData(mondayKey)[dayKey];
+  if (x) cell.bus = { route: x.route, at: fmt24(x.at) };
+  else delete cell.bus;
+  scheduleSave();
+  busTodaySig = '';
+  recompute();
+}
+
+// 근무 그리드 '퇴근 버스' 행: 고른 버스(실선) / 예상 퇴근 이후 첫 버스 추천(점선)
+function renderBusCells(mondayKey, wk, estimates) {
+  const b = busCfg();
+  const on = !!b.stop;
+  document.getElementById('rowBus').hidden = !on;
+  document.getElementById('grid').classList.toggle('has-bus', on);
+  if (!on) return;
+  const now = nowSec(), todayStr = ymd(new Date());
+  document.querySelectorAll('#rowBus .buscell').forEach(btn => {
+    const key = btn.dataset.day;
+    const date = busDateOf(mondayKey, key);
+    const cell = wk[key];
+    const off = BUS_OFF_TYPES.includes(effType(cell, ymd(date)));
+    let pick = null, cls = '', title = '클릭해서 퇴근 버스 선택';
+    if (off) {
+      title = '이 날은 퇴근 버스가 필요 없어요';
+    } else if (cell.bus) {
+      pick = cell.bus; cls = 'picked';
+      title = cell.bus.route + ' ' + cell.bus.at + ' 도착 → ' + fmt24(parseTimeToSec(cell.bus.at) - busBufferSec()) + ' 퇴근 · 클릭해서 변경';
+    } else {
+      const list = busArrivalsOn(date).filter(x => ymd(date) !== todayStr || x.leave >= now);
+      const rec = busRecommend(list, estimates[key]);
+      if (rec) {
+        pick = { route: rec.route, at: fmt24(rec.at) }; cls = 'suggest';
+        title = '추천: 예상 퇴근 ' + fmt24(estimates[key]) + ' 이후 첫 버스 · ' + fmt24(rec.leave) + ' 퇴근 · 클릭해서 선택';
+      }
+    }
+    btn.disabled = off;
+    btn.title = title;
+    const sig = [cls, pick ? pick.route + pick.at : '', off].join('|');
+    if (btn.dataset.sig === sig) return;           // 1초 타이머마다 DOM 을 새로 만들지 않도록
+    btn.dataset.sig = sig;
+    btn.className = 'buscell' + (cls ? ' ' + cls : '');
+    btn.textContent = '';
+    if (pick) btn.append(busEl('span', 'busno', pick.route), busEl('span', 'busat', pick.at));
+    else btn.textContent = off ? '—' : '선택';
+  });
+}
+
+// 고른 버스가 있고 퇴근이 비었으면 퇴근 칸에 '도착 N분 전'을 회색 예정으로 보여준다.
+function updateBusOutHints(wk) {
+  document.querySelectorAll('#rowOut .cellinput').forEach(inp => {
+    const cell = wk[inp.dataset.day];
+    const at = cell.bus && !inp.disabled ? parseTimeToSec(cell.bus.at) : null;
+    inp.placeholder = at === null ? '퇴근' : fmt24(at - busBufferSec());
+    inp.title = at === null ? '퇴근 시간'
+      : '퇴근 버스 ' + cell.bus.route + ' ' + cell.bus.at + ' 도착 ' + busCfg().bufferMin + '분 전 · 직접 입력하면 입력값이 우선';
+  });
+}
+
+// 버스 한 줄(요일 팝업 · 오늘의 버스 공용). ctx: { rec, pick, need, now(오늘이면) }
+function busOptionEl(x, ctx, onPick) {
+  const btn = busEl('button', 'busopt');
+  btn.type = 'button';
+  const picked = busIsPicked(ctx.pick, x);
+  const isRec = !picked && ctx.rec === x;
+  if (picked) btn.classList.add('picked');
+  else if (isRec) btn.classList.add('rec');
+  if (ctx.need !== null && ctx.need !== undefined && x.leave < ctx.need) btn.classList.add('early');
+  if (x.live) btn.classList.add('live');
+  const leave = busEl('span', 'busopt-leave');
+  leave.append(busEl('b', '', fmt24(x.leave)), document.createTextNode(' 퇴근'));
+  const tags = [];
+  if (picked) tags.push('선택됨');
+  else if (isRec) tags.push('추천');
+  if (ctx.now !== null && ctx.now !== undefined) {
+    const left = Math.round((x.leave - ctx.now) / 60);
+    if (left < 0) { tags.push('서둘러요'); btn.classList.add('hurry'); }
+    else tags.push(left >= 60 ? Math.floor(left / 60) + '시간 ' + (left % 60) + '분 후' : left + '분 후');
+  }
+  btn.append(busEl('span', 'busopt-at', fmt24(x.at)), busEl('span', 'busno', x.route), leave, busEl('span', 'busopt-tag', tags.join(' · ')));
+  btn.title = x.route + ' ' + fmt24(x.at) + ' 도착' + (x.live ? '(실시간)' : '') + ' → ' + fmt24(x.leave) + ' 퇴근' + (x.leave < (ctx.need || 0) ? ' (예상 퇴근보다 이름)' : '');
+  btn.addEventListener('click', onPick);
+  return btn;
+}
+
+// 요일 칸 클릭 → 그날 버스 도착 시각 목록에서 고른다(예상 퇴근 이후 첫 버스 추천).
+function openBusPicker(dayKey, anchor) {
+  const b = busCfg();
+  if (!b.stop) { toggleBus(); return; }
+  if (busPopDay === dayKey) { closeBusPicker(); return; }
+  const mondayKey = shownMondayKey();
+  const date = busDateOf(mondayKey, dayKey);
+  const isToday = ymd(date) === ymd(new Date());
+  const cell = weekData(mondayKey)[dayKey];
+  const need = busNeedSec(mondayKey, dayKey);
+  const now = nowSec();
+  const all = busArrivalsOn(date).filter(x => !isToday || x.leave >= now);
+  const rec = busRecommend(all, need);
+  const from = (need !== null ? need : (rec ? rec.leave : 17 * 3600)) - 40 * 60;
+  const list = all.filter(x => x.leave >= from || busIsPicked(cell.bus, x)).slice(0, 30);
+
+  const pop = document.getElementById('busPop');
+  pop.innerHTML = '';
+  const head = busEl('div', 'buspophead');
+  const close = busEl('button', 'buspopx', '×');
+  close.type = 'button';
+  close.title = '닫기';
+  close.addEventListener('click', closeBusPicker);
+  head.append(busEl('strong', '', busDayLabel(date) + ' · 퇴근 버스'), close);
+  const sub = busEl('div', 'buspopsub');
+  sub.append(document.createTextNode(b.stop.name + (need !== null ? ' · 예상 퇴근 ' : '')));
+  if (need !== null) sub.append(busEl('b', '', fmt24(need)));
+  sub.append(document.createTextNode(' · 도착 ' + b.bufferMin + '분 전 퇴근'));
+  if (parseTimeToSec(cell.out) !== null) sub.append(document.createTextNode(' · 입력한 퇴근 ' + normalizeTimeValue(cell.out) + ' 우선'));
+  const body = busEl('div', 'buspoplist');
+  if (!list.length) body.append(busEl('div', 'busempty', b.take.length ? '이 시간 이후 버스가 없어요' : '버스 화면에서 탈 버스를 체크하세요'));
+  let recEl = null;
+  list.forEach(x => {
+    const el = busOptionEl(x, { rec, pick: cell.bus, need, now: isToday ? now : null }, () => {
+      setDayBus(mondayKey, dayKey, busIsPicked(cell.bus, x) ? null : x);
+      closeBusPicker();
+    });
+    if (x === rec || busIsPicked(cell.bus, x)) recEl = recEl || el;
+    body.append(el);
+  });
+  const foot = busEl('div', 'buspopfoot');
+  const src = new Set(b.routes.map(r => BUS_SOURCE_LABEL[r.source] || r.source));
+  foot.append(busEl('span', '', [...src].join(' · ') + ' · ' + DOW[date.getDay()] + (busDayKind(date) === 'wd' ? ' 평일' : busDayKind(date) === 'sat' ? ' 토요일' : ' 휴일') + ' 배차'));
+  if (cell.bus) {
+    const clear = busEl('button', 'themebtn', '선택 해제');
+    clear.type = 'button';
+    clear.addEventListener('click', () => { setDayBus(mondayKey, dayKey, null); closeBusPicker(); });
+    foot.append(clear);
+  }
+  pop.append(head, sub, body, foot);
+  pop.hidden = false;
+  busPopDay = dayKey;
+  const r = anchor.getBoundingClientRect();
+  const left = Math.min(Math.max(8, r.left + r.width / 2 - pop.offsetWidth / 2), innerWidth - pop.offsetWidth - 8);
+  let top = r.bottom + 4;
+  if (top + pop.offsetHeight > innerHeight - 8) top = Math.max(8, r.top - pop.offsetHeight - 4);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  if (recEl) body.scrollTop = Math.max(0, recEl.offsetTop - body.offsetTop - 34);
+}
+function closeBusPicker() {
+  const pop = document.getElementById('busPop');
+  if (pop) pop.hidden = true;
+  busPopDay = null;
+}
+function onBusOutsideClick(e) {
+  const pop = document.getElementById('busPop');
+  if (pop && !pop.hidden && !pop.contains(e.target) && !e.target.closest('.buscell')) closeBusPicker();
+  const places = document.getElementById('busPlaces');
+  if (places && !places.hidden && !e.target.closest('#busSearchForm')) places.hidden = true;
+}
+
+/* 버스 화면: 지도에서 정류장 고르기 + 오늘의 버스 */
+// 버스 화면 열기. 사이드바에서는 selectView('bus') → enterBus(), 그리드의 '퇴근 버스' 셀에서는 toggleBus().
+function toggleBus() {
+  setView('bus');
+  enterBus();
+}
+function enterBus() {
+  const b = busCfg();
+  document.getElementById('busBuffer').value = b.bufferMin;
+  renderBusSide();
+  showBusTab(busSideTab);
+  if (!window.L) setBusStatus('지도 라이브러리를 불러오지 못했어요', 'err');
+  else if (!busMap) initBusMap();
+  else setTimeout(() => busMap.invalidateSize(), 0);
+  refreshBusLive();
+}
+function setBusStatus(msg, cls) {
+  const el = document.getElementById('busStatus');
+  el.textContent = msg || '';
+  el.className = 'calstatus' + (cls ? ' ' + cls : '');
+  el.title = msg || '';
+}
+function setBusBusy(busy) {
+  busBusy = busy;
+  document.getElementById('busScan').disabled = busy;
+  document.querySelector('#busSearchForm button').disabled = busy;
+}
+function initBusMap() {
+  const b = busCfg();
+  // 마지막으로 보던 지도 위치 → 고른 정류장 → 기본 위치 순으로 연다(다시 켜도 그대로)
+  const view = b.view ? [[b.view.lat, b.view.lng], b.view.zoom] : b.stop ? [[b.stop.lat, b.stop.lng], 17] : [BUS_DEFAULT_CENTER, 15];
+  busMap = L.map('busMap', { zoomControl: true, attributionControl: false }).setView(view[0], view[1]);
+  busMap.on('moveend', () => {
+    const c = busMap.getCenter();
+    busCfg().view = { lat: +c.lat.toFixed(5), lng: +c.lng.toFixed(5), zoom: busMap.getZoom() };
+    scheduleSave();
+  });
+  // 앱 창(pywebview) 안에서 링크를 누르면 창이 이동하므로 출처 표기는 링크 없이 텍스트로만
+  L.control.attribution({ prefix: false }).addAttribution('© OpenStreetMap contributors').addTo(busMap);
+  // 앱 창(file://)은 Referer 가 없어 OSM 타일 서버가 막는다 → 타일은 Python(bus.tile)이 받아 캐시해서 넘긴다
+  busTiles = new (L.GridLayer.extend({
+    createTile(c, done) {
+      const img = document.createElement('img');
+      img.alt = '';
+      img.onload = () => done(null, img);
+      img.onerror = () => done(null, img);
+      const req = apiReady('bus_tile') ? pywebview.api.bus_tile(c.z, c.x, c.y) : Promise.resolve(null);
+      req.then(src => { if (src) img.src = src; else done(null, img); }, () => done(null, img));
+      return img;
+    },
+  }))({ maxZoom: 19, minZoom: 6 }).addTo(busMap);
+  busLayer = L.layerGroup().addTo(busMap);
+  applyBusTiles();
+  busStops = Array.isArray(b.nearby) ? b.nearby : [];      // 지난번에 찾은 주변 정류장
+  renderBusMarkers();
+  setTimeout(() => busMap.invalidateSize(), 0);
+}
+// 다크 테마는 밝은 OSM 타일을 CSS 필터로 반전해 어둡게 보여준다
+function applyBusTiles() {
+  const el = document.getElementById('busMap');
+  if (el) el.classList.toggle('dark', document.documentElement.getAttribute('data-theme') !== 'excel');
+}
+function busCssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function renderBusMarkers() {
+  if (!busLayer) return;
+  busLayer.clearLayers();
+  const sel = busCfg().stop;
+  const pv = busPreview && !busPreview.saved ? busPreview.stop : null;
+  const list = busStops.slice();
+  [sel, pv].forEach(x => { if (x && !list.some(s => s.id === x.id)) list.push(x); });
+  const mint = busCssVar('--mint'), blue = busCssVar('--total'), panel = busCssVar('--panel'), yellow = busCssVar('--remaining');
+  list.forEach(s => {
+    const on = !!sel && sel.id === s.id;            // 저장된 퇴근 정류장
+    const look = !!pv && pv.id === s.id;            // 지금 보고 있는(저장 전) 정류장
+    const m = L.circleMarker([s.lat, s.lng], {
+      radius: on ? 9 : look ? 8 : 6, weight: on || look ? 3 : 2, color: on ? mint : look ? yellow : blue,
+      fillColor: on ? mint : panel, fillOpacity: on ? .85 : .95,
+    });
+    const tip = busEl('div');
+    tip.append(busEl('b', '', s.name + (s.no ? ' (' + s.no + ')' : '')));
+    if ((s.routes || []).length) tip.append(document.createElement('br'), document.createTextNode(s.routes.join(' · ')));
+    m.bindTooltip(tip, { direction: 'top', offset: [0, -6] });
+    m.on('click', () => previewBusStop(s));
+    busLayer.addLayer(m);
+  });
+  document.getElementById('busMapHint').hidden = list.length > 0;
+}
+
+async function scanBusStops() {
+  if (!busMap || busBusy) return;
+  const b = busCfg();
+  const c = busMap.getCenter();
+  const radius = Math.round(Math.min(900, Math.max(250, busMap.distance(c, busMap.getBounds().getNorthEast()) * 0.75)));
+  setBusBusy(true);
+  setBusStatus(busHasKey() ? '정류장 찾는 중…' : '정류장 찾는 중… (OSM 서버가 붐비면 30초쯤 걸려요)');
+  let res = null;
+  try {
+    res = apiReady('bus_nearby') ? await pywebview.api.bus_nearby(c.lat, c.lng, radius)
+      : { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  setBusBusy(false);
+  if (!res || res.status !== 'ok') { setBusStatus((res && res.message) || '정류장 조회 실패', 'err'); return; }
+  busStops = res.stops || [];
+  b.nearby = busStops;             // 다시 켰을 때 지도에 그대로 보이도록 저장
+  scheduleSave();
+  renderBusMarkers();
+  setBusStatus(busStops.length ? '정류장 ' + busStops.length + '곳 · 눌러서 오는 버스 보기' : '근처에 정류장이 없어요 — 지도를 옮겨 다시 찾아보세요', busStops.length ? 'ok' : 'err');
+}
+
+async function searchBusPlace(e) {
+  if (e) e.preventDefault();
+  const q = document.getElementById('busSearch').value.trim();
+  const box = document.getElementById('busPlaces');
+  if (!q || busBusy) return;
+  setBusStatus('장소 검색 중…');
+  let res = null;
+  try {
+    res = apiReady('bus_search') ? await pywebview.api.bus_search(q) : { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (err) { res = { status: 'error', message: String(err) }; }
+  box.innerHTML = '';
+  box.hidden = true;
+  if (!res || res.status !== 'ok') { setBusStatus((res && res.message) || '장소 검색 실패', 'err'); return; }
+  const places = res.places || [];
+  if (!places.length) { setBusStatus('검색 결과가 없어요', 'err'); return; }
+  const go = p => {
+    box.hidden = true;
+    if (busMap) busMap.setView([p.lat, p.lng], 17);
+    scanBusStops();
+  };
+  if (places.length === 1) { go(places[0]); return; }
+  setBusStatus('');
+  places.forEach(p => {
+    const btn = busEl('button', 'busplace', p.name);
+    btn.type = 'button';
+    if (p.detail) btn.append(busEl('small', '', p.detail));
+    btn.addEventListener('click', () => go(p));
+    box.append(btn);
+  });
+  box.hidden = false;
+}
+
+// 지도에서 정류장을 누르면 '정류장' 탭에서 그 정류장에 오는 버스(노선별 다음 도착)를 먼저 보여주고,
+// 저장을 눌러야 퇴근 정류장이 된다. 저장된 정류장을 다시 열면 탈 버스만 바꿔 저장할 수 있다.
+async function previewBusStop(stop) {
+  const b = busCfg();
+  const saved = !!b.stop && b.stop.id === stop.id;
+  const seq = ++busPreviewSeq;
+  const p = busPreview = { stop, saved, routes: [], take: new Set(saved ? b.take : []), live: null, loading: true, liveLoading: false, error: '' };
+  showBusTab('stop');
+  renderBusMarkers();
+  // 저장된 정류장도 노선을 새로 받는다(새 노선 · 경기도 API 반영). 못 받으면 저장된 노선으로.
+  let res = null;
+  try {
+    res = apiReady('bus_stop_routes') ? await pywebview.api.bus_stop_routes(stop)
+      : { status: 'error', message: '데스크톱 앱에서만 가능' };
+  } catch (e) { res = { status: 'error', message: String(e) }; }
+  if (saved && (!res || res.status !== 'ok')) res = { status: 'ok', routes: JSON.parse(JSON.stringify(b.routes)) };
+  if (seq !== busPreviewSeq) return;                 // 그새 다른 정류장을 눌렀으면 버린다
+  p.loading = false;
+  if (!res || res.status !== 'ok') { p.error = (res && res.message) || '노선 조회 실패'; renderBusPreview(); return; }
+  p.routes = res.routes || [];
+  if (!saved) p.take = new Set(p.routes.map(r => r.no));    // 새 정류장은 일단 전부 체크(저장된 정류장은 고른 것만)
+  const fresh = saved && busLive && Date.now() - busLive.at < 50000;
+  p.liveLoading = !fresh && busLiveCapable(stop) && busHasKey() && apiReady('bus_arrivals');
+  if (fresh) p.live = busLive;
+  renderBusPreview();
+  if (!p.liveLoading) return;
+  let a = null;
+  try { a = await pywebview.api.bus_arrivals(stop); } catch (e) { a = null; }
+  if (seq !== busPreviewSeq) return;
+  p.liveLoading = false;
+  if (a && a.status === 'ok') {
+    p.live = busLiveFrom(a);
+    busCalibrate(p.routes, p.live.arrivals, p.live.base);   // 미리보기 시각도 실시간에 맞춘다
+  }
+  renderBusPreview();
+}
+
+function saveBusPreview() {
+  const p = busPreview;
+  if (!p || p.loading || !p.routes.length || !p.take.size) return;
+  const b = busCfg();
+  const s = p.stop;
+  b.stop = { id: s.id, name: s.name, no: s.no || '', lat: s.lat, lng: s.lng, source: s.source, cityCode: s.cityCode || '', nodeId: s.nodeId || '', stationId: s.stationId || '' };
+  b.routes = p.routes;
+  b.take = p.routes.map(r => r.no).filter(no => p.take.has(no));
+  busLive = p.live;
+  if (p.live) { b.liveFixAt = p.live.at; busSnapPicks(p.routes); }
+  doSave();
+  busPreview = null;
+  showBusTab('today');
+  renderBusMarkers();
+  renderBusSide();
+  recompute();
+  refreshBusLive();
+  setBusStatus('퇴근 정류장 저장 · ' + s.name + ' · 탈 버스 ' + b.take.length + '개', 'ok');
+}
+
+// 오른쪽 열 탭: 오늘의 버스 / 실시간 / 정류장(지도에서 누른 정류장 미리보기 — 있을 때만)
+function showBusTab(tab) {
+  busSideTab = tab === 'stop' && busPreview ? 'stop' : tab === 'live' ? 'live' : 'today';
+  const stopTab = document.getElementById('busTabStop');
+  stopTab.hidden = !busPreview;
+  if (busPreview) stopTab.textContent = '정류장 · ' + busPreview.stop.name;
+  [['busTabToday', 'today'], ['busTabLive', 'live'], ['busTabStop', 'stop']].forEach(([id, t]) => {
+    const el = document.getElementById(id);
+    el.classList.toggle('active', busSideTab === t);
+    el.setAttribute('aria-selected', String(busSideTab === t));
+  });
+  document.getElementById('busTodayPane').hidden = busSideTab !== 'today';
+  document.getElementById('busLivePane').hidden = busSideTab !== 'live';
+  document.getElementById('busStopPane').hidden = busSideTab !== 'stop';
+  if (busSideTab === 'stop') renderBusPreview();
+  else if (busSideTab === 'live') { busLiveTabSig = ''; renderBusLiveTab(); }
+  else { busTodaySig = ''; renderBusToday(); }
+}
+
+// 실시간 탭: 저장된 정류장의 탈 버스만, 노선마다 다가오는 버스(최대 2대)를 곧 오는 순으로.
+// 다가오는 버스가 없는 노선도 '도착 정보 없음'으로 남겨서 저장한 버스가 다 보이게 한다.
+function renderBusLiveTab() {
+  const b = busCfg();
+  const aged = busLive ? Math.max(0, (Date.now() - busLive.at) / 1000) : 0;
+  const sig = [b.stop && b.stop.id, b.take.join(','), busLive && busLive.at, Math.floor(aged / 30), busLiveError, busHasKey()].join('|');
+  if (sig === busLiveTabSig) return;
+  busLiveTabSig = sig;
+  document.getElementById('busLiveTitle').textContent = b.stop ? b.stop.name + (b.stop.no ? ' · ' + b.stop.no : '') : '실시간 도착';
+  const got = busLive ? new Date(busLive.at) : null;
+  document.getElementById('busLiveMeta').textContent = got
+    ? pad(got.getHours()) + ':' + pad(got.getMinutes()) + ':' + pad(got.getSeconds()) + ' 기준 · 1분마다 갱신' : '';
+  const box = document.getElementById('busLiveList');
+  box.innerHTML = '';
+  if (!b.stop) { box.append(busEl('div', 'busempty', '저장된 퇴근 정류장이 없어요.\n지도에서 정류장을 눌러 저장하세요.')); return; }
+  if (!b.take.length) { box.append(busEl('div', 'busempty', '탈 버스가 없어요 — 오늘의 버스 탭에서 정류장 이름을 눌러 체크하세요.')); return; }
+  if (!busLiveCapable(b.stop) || !busHasKey()) {
+    box.append(busEl('div', 'busempty', '이 정류장은 실시간 도착을 볼 수 없어요.\n(경기도 · TAGO 정류장 + 공공데이터포털 키 필요)'));
+    return;
+  }
+  if (!busLive) { box.append(busEl('div', 'busempty', busLiveError ? '실시간 도착 조회 실패: ' + busLiveError : '실시간 도착 불러오는 중…')); return; }
+  const take = new Set(b.take);
+  const rows = b.routes.filter(r => take.has(r.no))
+    .map(r => ({ r, buses: busLive.arrivals.filter(a => busLiveMatch(r, a)).slice(0, 2) }))
+    .sort((x, y) => (x.buses.length ? x.buses[0].sec : Infinity) - (y.buses.length ? y.buses[0].sec : Infinity));
+  rows.forEach(({ r, buses }) => {
+    const row = busEl('div', 'busliverow' + (buses.length ? '' : ' none'));
+    const info = busEl('span', 'busliveinfo');
+    if (!buses.length) info.textContent = '도착 정보 없음';
+    buses.forEach(a => {
+      const min = Math.max(0, Math.round((a.sec - aged) / 60));
+      const at = (Math.round((busLive.base + a.sec) / 60) * 60) % 86400;
+      const el = busEl('span');
+      el.append(busEl('b', '', min ? min + '분' : '곧 도착'), document.createTextNode(fmt24(at) + (a.prev ? ' · ' + a.prev + '정류장 전' : '')));
+      info.append(el);
+    });
+    row.append(busEl('span', 'busno', r.no), busEl('span', 'busroute-meta', r.dest ? r.dest + ' 방면' : ''), info);
+    box.append(row);
+  });
+}
+
+// '배차 10~25분'(출퇴근~평시) / '배차 15분'. 그 요일 배차가 없으면 ''
+function busIvText(r, kind) {
+  const a = (r.iv && (r.ivOff ? r.iv[kind] : r.iv[kind] || r.iv.wd)) || 0;
+  const z = (r.ivOff && r.ivOff[kind]) || a;
+  if (!a && !z) return '';
+  return '배차 ' + (a && z && a !== z ? Math.min(a, z) + '~' + Math.max(a, z) : (a || z)) + '분';
+}
+
+// 정류장 탭: 노선마다 다음 도착 3번(실시간이면 초록) + 탈 버스 체크 + 저장
+function renderBusPreview() {
+  const p = busPreview;
+  if (!p) return;
+  const s = p.stop;
+  const now = nowSec();
+  p.min = Math.floor(now / 60);
+  document.getElementById('busPrevName').textContent = s.name;
+  document.getElementById('busPrevMeta').textContent = [s.no, s.dist ? s.dist + 'm' : '', p.saved ? '저장된 퇴근 정류장' : ''].filter(Boolean).join(' · ');
+  const liveEl = document.getElementById('busPrevLive');
+  renderBusLiveLine(liveEl, p.live, () => true);
+  if (p.liveLoading) { liveEl.hidden = false; liveEl.textContent = '실시간 도착 불러오는 중…'; }
+  const save = document.getElementById('busPrevSave');
+  save.textContent = p.saved ? '탈 버스 저장' : '이 정류장으로 저장';
+  save.disabled = p.loading || !p.routes.length || !p.take.size;
+  const box = document.getElementById('busPrevRoutes');
+  box.innerHTML = '';
+  if (p.loading) { box.append(busEl('div', 'busempty', '노선 정보를 불러오는 중…')); return; }
+  if (p.error) { box.append(busEl('div', 'busempty', p.error)); return; }
+  if (!p.routes.length) { box.append(busEl('div', 'busempty', '이 정류장을 지나는 노선 정보를 찾지 못했어요.\n옆 정류장을 눌러보세요.')); return; }
+  const today = new Date(), kind = busDayKind(today);
+  const live = busLiveTimes(p.live, today);
+  p.routes.forEach(r => {
+    const row = busEl('label', 'busprevroute');
+    const chk = busEl('input');
+    chk.type = 'checkbox';
+    chk.checked = p.take.has(r.no);
+    chk.addEventListener('change', () => {
+      if (chk.checked) p.take.add(r.no); else p.take.delete(r.no);
+      save.disabled = !p.take.size;
+    });
+    const meta = busEl('span', 'busroute-meta', [r.dest ? r.dest + ' 방면' : '', busIvText(r, kind)].filter(Boolean).join(' · '));
+    meta.title = (r.kind ? r.kind + ' · ' : '') + (r.first ? r.first + '~' + r.last + ' · ' : '')
+      + ['wd', 'sat', 'sun'].map(d => ({ wd: '평일', sat: '토', sun: '일/공휴일' })[d] + ' ' + (busIvText(r, d) || '운행 안 함')).join(' · ');
+    const times = busEl('span', 'busprevtimes');
+    const next = busTimesWithLive(r, today, live).filter(t => t.at >= now).slice(0, 3);
+    if (!next.length) times.textContent = !r.first ? '시간표 정보 없음 · 실시간만' : busRouteTimes(r, today).length ? '오늘 운행 끝' : '오늘 운행 안 함';
+    next.forEach((t, i) => {
+      const el = busEl('b', t.live ? 'live' : '', fmt24(t.at));
+      el.title = t.live ? '실시간 도착 예정' : '시간표 추정';
+      times.append(el);
+      if (i === 0) times.append(busEl('small', '', Math.max(0, Math.round((t.at - now) / 60)) + '분 후'));
+    });
+    row.append(chk, busEl('span', 'busno', r.no), meta, times);
+    box.append(row);
+  });
+}
+
+// 배차 출처 + 오늘 실시간 보정 시각
+function renderBusSrc() {
+  const b = busCfg();
+  const parts = [...new Set(b.routes.map(r => BUS_SOURCE_LABEL[r.source] || r.source))];
+  const fix = b.liveFixAt ? new Date(b.liveFixAt) : null;
+  if (fix && ymd(fix) === ymd(new Date())) parts.push('실시간 보정 ' + pad(fix.getHours()) + ':' + pad(fix.getMinutes()));
+  const el = document.getElementById('busSrc');
+  el.textContent = parts.join(' · ');
+  el.title = fix ? '실시간 도착 예정에 맞춰 노선별 정류장 도착 시각을 보정했어요' : '';
+}
+
+// 오늘의 버스 탭 머리: 저장된 정류장(누르면 정류장 탭에서 탈 버스 변경) · 배차 출처 · N분 전
+function renderBusSide() {
+  const b = busCfg();
+  const btn = document.getElementById('busStopEdit');
+  btn.disabled = !b.stop;
+  btn.textContent = b.stop ? b.stop.name + (b.stop.no ? ' · ' + b.stop.no : '') + ' ›' : '퇴근 정류장 미설정';
+  btn.title = b.stop ? '정류장에 오는 버스 보기 · 탈 버스 바꾸기' : '';
+  renderBusSrc();
+  busTodaySig = '';
+  renderBusToday();
+}
+
+// 오늘의 버스: 지금부터(또는 예상 퇴근 30분 전부터) 정류장에 올 버스와 그에 맞춘 퇴근 시각.
+function renderBusToday() {
+  const box = document.getElementById('busToday');
+  const b = busCfg();
+  const today = new Date(), now = nowSec();
+  const ti = todayInfo();
+  const cell = ti.dayKey ? weekData(ti.mondayKey)[ti.dayKey] : null;
+  const off = !cell || BUS_OFF_TYPES.includes(effType(cell, ymd(today)));
+  const need = off ? null : busNeedSec(ti.mondayKey, ti.dayKey);
+  const sig = [Math.floor(now / 60), b.take.join(','), b.bufferMin, b.stop && b.stop.id, cell && JSON.stringify(cell.bus || null), need, busLive && busLive.at].join('|');
+  if (sig === busTodaySig) return;
+  busTodaySig = sig;
+
+  document.getElementById('busTodayTitle').textContent = '오늘의 버스 · ' + (today.getMonth() + 1) + '/' + today.getDate() + ' (' + DOW[today.getDay()] + ')';
+  const needEl = document.getElementById('busNeed');
+  needEl.textContent = '';
+  if (need !== null) needEl.append(document.createTextNode('예상 퇴근 '), busEl('b', '', fmt24(need)));
+  else needEl.textContent = !ti.dayKey ? '주말' : off ? '근무 없음' : '';
+  renderBusLive();
+
+  box.innerHTML = '';
+  if (!b.stop) { box.append(busEl('div', 'busempty', '지도에서 정류장을 누르면 그 정류장에 오는 버스를 볼 수 있어요.\n확인하고 저장하면 오늘 탈 버스와 퇴근 시각이 여기에 보여요.')); return; }
+  if (!b.take.length) { box.append(busEl('div', 'busempty', '탈 버스가 없어요 — 위 정류장 이름을 눌러 체크하세요.')); return; }
+  const all = busArrivalsOn(today).filter(x => x.at >= now);          // 아직 정류장에 안 온 버스
+  const rec = busRecommend(all.filter(x => x.leave >= now), need);
+  const start = need !== null ? Math.max(now, need - 30 * 60) : now;
+  const list = all.filter(x => start === now || x.leave >= start || busIsPicked(cell && cell.bus, x)).slice(0, 24);
+  if (!list.length) {
+    box.append(busEl('div', 'busempty', all.length ? '예상 퇴근(' + fmt24(need) + ') 이후에는 버스가 없어요.' : '오늘 남은 버스가 없어요.'));
+    return;
+  }
+  let focus = null;
+  list.forEach(x => {
+    const el = busOptionEl(x, { rec, pick: cell && !off ? cell.bus : null, need, now }, () => {
+      if (!ti.dayKey || off) return;
+      setDayBus(ti.mondayKey, ti.dayKey, busIsPicked(cell.bus, x) ? null : x);
+    });
+    if (x === rec || busIsPicked(cell && cell.bus, x)) focus = focus || el;
+    box.append(el);
+  });
+  if (focus) box.scrollTop = Math.max(0, focus.offsetTop - box.offsetTop - 30);
+}
+
+function renderBusLive() {
+  const take = new Set(busCfg().take);
+  renderBusLiveLine(document.getElementById('busLive'), busLive, a => take.has(a.no));
+}
+// '실시간 · 375 3분 (2정류장 전) …' 한 줄. keep: 보여줄 도착만 거르는 함수
+function renderBusLiveLine(el, live, keep) {
+  el.innerHTML = '';
+  el.hidden = !live;
+  if (!live) return;
+  const rows = live.arrivals.filter(keep);
+  if (!rows.length) { el.textContent = '실시간 · 지금 다가오는 버스 없음'; return; }
+  const aged = (Date.now() - live.at) / 1000;
+  el.append(busEl('b', '', '실시간'));
+  el.title = '초록 시각 = 실시간 도착 예정, 흰 시각 = 시간표 추정';
+  rows.slice(0, 6).forEach(a => {
+    const min = Math.max(0, Math.round((a.sec - aged) / 60));
+    const span = busEl('span');
+    span.append(busEl('b', '', a.no), document.createTextNode(' ' + (min ? min + '분' : '곧 도착') + (a.prev ? ' (' + a.prev + '정류장 전)' : '')));
+    el.append(span);
+  });
+}
+
+// 정류장 순번으로 추정한 '기점→정류장 소요'(offset)는 수십 분씩 틀릴 수 있다. 지금 다가오는 버스의
+// 실시간 도착 예정에 시간표 위상을 맞춰 offset 을 배차 간격 안에서 옮긴다. 고정 배차 모델이라
+// 다른 날짜 시각에도 그대로 쓰도록 저장하고, 이미 고른 버스는 새 시간표의 가장 가까운 시각으로 맞춘다.
+function calibrateBusRoutes(arrivals, baseSec) {
+  const b = busCfg();
+  const moved = busCalibrate(b.routes, arrivals, baseSec);
+  b.liveFixAt = Date.now();
+  if (moved.length) busSnapPicks(moved);
+  scheduleSave();
+  return moved.length > 0;
+}
+// routes 의 offset 을 실시간 도착에 맞춰 옮기고(저장 전 미리보기에도 사용), 옮긴 노선 목록을 돌려준다.
+// 지금 시간표에서 실시간 도착 예정과 가장 가까운 시각을 찾아 그 차이만큼 옮긴다(출퇴근/평시 배차가 섞여도 동작).
+function busCalibrate(routes, arrivals, baseSec) {
+  const today = new Date();
+  const moved = [];
+  routes.forEach(r => {
+    const a = arrivals.find(x => busLiveMatch(r, x));          // 가장 먼저 오는 버스(도착순 정렬)
+    const times = busRouteTimes(r, today);
+    if (!a || times.length < 2) return;
+    const obs = Math.round((baseSec + a.sec) / 60) * 60;      // 정류장 도착 예정(초, 분 단위)
+    const i = times.reduce((p, t, j) => (Math.abs(t - obs) < Math.abs(times[p] - obs) ? j : p), 0);
+    const step = Math.abs(times[Math.min(i + 1, times.length - 1)] - times[Math.max(i - 1, 0)]) / (i > 0 && i < times.length - 1 ? 2 : 1);
+    if (Math.abs(obs - times[i]) > step) return;            // 운행 시간 밖(막차 뒤 등) — 보정하지 않음
+    let off = Math.round(r.offset || 0) + Math.round((obs - times[i]) / 60);
+    while (off < 0) off += Math.round(step / 60);
+    if (off !== r.offset) { r.offset = off; moved.push(r); }
+  });
+  return moved;
+}
+// 오늘 이후로 고른 버스 중 보정된 노선은 새 시간표에서 가장 가까운 시각으로 옮긴다(배차 절반 이내).
+function busSnapPicks(routes) {
+  const todayStr = ymd(new Date());
+  Object.keys(state.weeks).forEach(mondayKey => {
+    DAYS.forEach(([key]) => {
+      const cell = state.weeks[mondayKey][key];
+      const r = cell && cell.bus && routes.find(x => x.no === cell.bus.route);
+      const date = busDateOf(mondayKey, key);
+      const at = r ? parseTimeToSec(cell.bus.at) : null;
+      if (at === null || ymd(date) < todayStr) return;
+      const times = busRouteTimes(r, date);
+      const near = times.reduce((p, t) => (p === null || Math.abs(t - at) < Math.abs(p - at) ? t : p), null);
+      const step = (times[1] - times[0]) || 0;
+      if (near !== null && near !== at && Math.abs(near - at) <= step / 2) cell.bus.at = fmt24(near);
+    });
+  });
+}
+
+// bus_arrivals 응답 → { at(ms), base(받은 시각, 하루 초), arrivals }
+function busLiveFrom(res) {
+  const n = new Date();
+  return { at: n.getTime(), base: n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds(), arrivals: res.arrivals || [] };
+}
+
+// TAGO 정류장 + 키가 있을 때만 실시간 도착을 받아 시간표를 보정한다. 준비가 안 됐으면 null.
+async function fetchBusLive() {
+  const b = busCfg();
+  if (!busLiveCapable(b.stop) || !busHasKey() || !apiReady('bus_arrivals')) return null;
+  let res = null;
+  try { res = await pywebview.api.bus_arrivals(b.stop); } catch (e) { res = { status: 'error', message: String(e) }; }
+  if (!res || res.status !== 'ok') return res || { status: 'error', message: '응답 없음' };
+  busLive = busLiveFrom(res);
+  if (calibrateBusRoutes(busLive.arrivals, busLive.base)) {
+    if (viewMode === 'bus') renderBusSide();
+    recompute();
+  } else renderBusSrc();
+  return res;
+}
+
+// 버스 화면을 보는 동안 1분마다 실시간 도착 갱신(+ 보정)
+async function refreshBusLive() {
+  clearTimeout(busLiveTimer);
+  busLiveTimer = null;
+  // 방금(50초 안) 받은 실시간이 있으면 다시 부르지 않는다 — 배포 키 하루 호출 한도를 아끼려고
+  const fresh = busLive && Date.now() - busLive.at < 50000;
+  const res = viewMode !== 'bus' ? null : fresh ? { status: 'ok' } : await fetchBusLive();
+  if (!res || res.status !== 'ok') {
+    busLive = null;
+    if (res) setBusStatus('실시간 도착 조회 실패: ' + (res.message || '알 수 없음'), 'err');
+  }
+  busLiveError = res && res.status !== 'ok' ? res.message || '알 수 없음' : '';
+  busTodaySig = '';
+  renderBusToday();
+  renderBusLiveTab();
+  if (res && viewMode === 'bus') busLiveTimer = setTimeout(refreshBusLive, 60000);
+}
+
+// 공공데이터포털 키는 항상 config.json 의 busApiKey(exe 에 묶임)를 쓴다 — 화면에서 넣는 곳은 없고 값은 Python 에만 있다.
+function busHasKey() { return busDefaultKey; }
+async function loadBusInfo() {
+  try {
+    if (apiReady('bus_info')) busDefaultKey = !!(await pywebview.api.bus_info()).defaultKey;
+  } catch (e) { busDefaultKey = false; }
+}
+function onBusBufferChange(e) {
+  const v = parseInt(e.target.value, 10);
+  busCfg().bufferMin = isNaN(v) ? 5 : Math.max(0, Math.min(60, v));
+  e.target.value = busCfg().bufferMin;
+  scheduleSave();
+  renderBusSide();
+  recompute();
 }
 
 /* ---------------- TTree 휴가/출장 ---------------- */
@@ -1696,6 +2518,11 @@ async function loadState() {
   if (!state.settings) state.settings = defaultState().settings;
   state.settings = Object.assign({}, defaultState().settings, state.settings);
   normalizeStoredTimes();
+  if (state.settings.bus) {          // TAGO 로 저장했던 경기도 정류장 → 경기도 API 정류장 모양으로
+    const b = state.settings.bus;
+    b.stop = busGbisShape(b.stop);
+    if (Array.isArray(b.nearby)) b.nearby = b.nearby.map(busGbisShape);
+  }
   await doSave();
 }
 
@@ -1720,6 +2547,7 @@ function updateWeekLabel() {
 }
 
 function rerenderWeek() {
+  closeBusPicker();
   buildGrid();
   fillInputsFromState();
   updateWeekLabel();
@@ -1827,6 +2655,17 @@ async function init() {
   document.getElementById('themeBtn').addEventListener('click', toggleTheme);
   document.querySelectorAll('#sideNav .navitem').forEach(b =>
     b.addEventListener('click', () => selectView(b.dataset.view)));
+  document.getElementById('busSearchForm').addEventListener('submit', searchBusPlace);
+  document.getElementById('busScan').addEventListener('click', scanBusStops);
+  document.getElementById('busBuffer').addEventListener('change', onBusBufferChange);
+  document.getElementById('busTabToday').addEventListener('click', () => showBusTab('today'));
+  document.getElementById('busTabLive').addEventListener('click', () => showBusTab('live'));
+  document.getElementById('busTabStop').addEventListener('click', () => showBusTab('stop'));
+  document.getElementById('busPrevSave').addEventListener('click', saveBusPreview);
+  document.getElementById('busStopEdit').addEventListener('click', () => { if (busCfg().stop) previewBusStop(busCfg().stop); });
+  document.getElementById('busBuffer').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+  document.addEventListener('mousedown', onBusOutsideClick);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeBusPicker(); document.getElementById('busPlaces').hidden = true; } });
   document.getElementById('mealReload').addEventListener('click', reloadMeal);
   document.getElementById('mealOrigin').addEventListener('click', openMealOrigin);
   document.getElementById('calReload').addEventListener('click', fetchCal);
@@ -1865,6 +2704,8 @@ async function init() {
   refreshEhr(false);
   // TTree 휴가·출장도 백그라운드로 한 번 조회해 근태에 반영 (로그인 안 돼 있으면 조용히 넘어감)
   if (apiReady('ttree_status')) loadTtreeStatus();
+  // TAGO 키(개인/배포 기본)가 있으면 실시간 도착으로 퇴근 버스 시간표를 한 번 보정(버스 화면을 안 열어도 그리드 추천에 반영)
+  loadBusInfo().then(fetchBusLive);
 }
 
 if (window.pywebview) {

@@ -2731,7 +2731,7 @@ function setApprBusy(busy) {
 
 async function lookupApprovalProject() {
   const keyword = (document.getElementById('apprProject').value || '').trim();
-  if (!keyword) { setApprMsg('프로젝트 이름(일부)이나 코드를 먼저 입력하세요.', 'err'); return; }
+  if (!keyword) { setApprMsg('프로젝트 이름(일부)이나 코드를 먼저 입력해주십시오.', 'err'); return; }
   setApprBusy(true); setApprMsg('프로젝트 검색 중…');
   let res = null;
   try {
@@ -2739,7 +2739,7 @@ async function lookupApprovalProject() {
     else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setApprBusy(false);
-  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err'); return; }
+  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요합니다 — 사이드바 ‘로그인’ 후 다시 시도해주십시오.', 'err'); return; }
   if (res.status !== 'ok') { setApprMsg('프로젝트 검색 실패: ' + (res.message || '알 수 없음'), 'err'); return; }
   approvalProjectMatches = res.projects || [];
   const exact = approvalProjectMatches.find(m => m.code === keyword || m.name === keyword);
@@ -2749,10 +2749,10 @@ async function lookupApprovalProject() {
     setApprMsg('프로젝트 확정: ' + chosen.code, 'ok');
   } else if (!approvalProjectMatches.length) {
     setApprovalProjectPick('', '');
-    setApprMsg('‘' + keyword + '’ 프로젝트를 못 찾았어요.', 'err');
+    setApprMsg('‘' + keyword + '’ 프로젝트를 찾지 못했습니다.', 'err');
   } else {
     setApprovalProjectPick('', '');
-    setApprMsg(approvalProjectMatches.length + '건이 검색됐어요 — 목록에서 하나를 고르세요.');
+    setApprMsg(approvalProjectMatches.length + '건이 검색되었습니다 — 목록에서 하나를 선택해주십시오.');
   }
   renderApprovalProjectPick(approvalProjectMatches);
   refreshApprovalSheet();
@@ -2767,15 +2767,15 @@ async function lookupApprovalPayday() {
     else res = { status: 'error', message: '데스크톱 앱에서만 가능' };
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setApprBusy(false);
-  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시.', 'err'); return; }
+  if (!res || res.status === 'login_required') { setApprMsg('EHR 로그인이 필요합니다 — 상단 ‘로그인’ 후 다시 시도해주십시오.', 'err'); return; }
   if (res.status === 'ok' && res.payday) {
     approvalPayday = res.payday;
     approvalPaySrc = res.sourceTitle ? '(' + res.sourceTitle + ')' : '';
     setApprMsg('지급예정일 조회 완료', 'ok');
   } else if (res.status === 'not_found') {
-    approvalPayday = null; approvalPaySrc = ''; setApprMsg(res.message || '지급일정 공지를 못 찾았어요.', 'err');
+    approvalPayday = null; approvalPaySrc = ''; setApprMsg(res.message || '지급일정 공지를 찾지 못했습니다.', 'err');
   } else if (res.status === 'no_date') {
-    approvalPayday = null; setApprMsg('공지에서 개인경비 날짜를 못 찾았어요 — 직접 확인해주세요.', 'err');
+    approvalPayday = null; setApprMsg('공지에서 개인경비 날짜를 찾지 못했습니다 — 공지를 확인해주십시오.', 'err');
   } else { setApprMsg('조회 실패: ' + (res.message || '알 수 없음'), 'err'); }
   refreshApprovalSheet();
 }
@@ -2787,7 +2787,7 @@ async function openApprovalForm() {
   const pj = approvalProjectSetting();
   const payload = { title: apprTitleText(month, name), payee: name, payday: approvalPayday || '',
                     project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null };
-  setApprBusy(true); setApprMsg('결재 폼 여는 중… 열리면 카드내역 입력과 검토·제출을 이어서 해 주세요.');
+  setApprBusy(true); setApprMsg('결재 폼 여는 중… 열리면 카드내역 입력과 검토·제출을 진행해주십시오.');
   let res = null;
   try {
     if (apiReady('approval_prefill')) res = await pywebview.api.approval_prefill(payload);
@@ -2795,9 +2795,9 @@ async function openApprovalForm() {
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setApprBusy(false);
   if (!res) { setApprMsg('실패', 'err'); return; }
-  if (res.status === 'login_required') setApprMsg('EHR 로그인이 필요해요 — 상단 ‘로그인’ 후 다시.', 'err');
-  else if (res.status === 'started') setApprMsg((res.message || '결재 창을 열었어요.') + ' 열린 창에서 카드내역 입력과 검토·제출을 이어서 해 주세요.', 'ok');
-  else if (res.status === 'ok') setApprMsg('폼 창을 닫았어요. (자동채움 ' + (res.filled && res.filled.title ? '완료' : '일부') + ')', 'ok');
+  if (res.status === 'login_required') setApprMsg('EHR 로그인이 필요합니다 — 상단 ‘로그인’ 후 다시 시도해주십시오.', 'err');
+  else if (res.status === 'started') setApprMsg((res.message || '결재 창을 열었습니다.') + ' 열린 창에서 카드내역 입력과 검토·제출을 진행해주십시오.', 'ok');
+  else if (res.status === 'ok') setApprMsg('폼 창을 닫았습니다. (자동채움 ' + (res.filled && res.filled.title ? '완료' : '일부') + ')', 'ok');
   else setApprMsg('실패: ' + (res.message || '알 수 없음'), 'err');
 }
 
@@ -2964,17 +2964,17 @@ async function lookupTripPayday() {
     setTripMsg('지급예정일 조회 완료', 'ok');
   } else {
     tripPayday = null; tripPaySrc = '';
-    setTripMsg((res && (res.message || (res.status === 'login_required' ? 'EHR 로그인이 필요해요.' : ''))) || '지급예정일을 못 찾았어요 — 폼에서 넣어 주세요.', 'err');
+    setTripMsg((res && (res.message || (res.status === 'login_required' ? 'EHR 로그인이 필요합니다.' : ''))) || '지급예정일을 찾지 못했습니다 — 폼에서 입력해주십시오.', 'err');
   }
   refreshTripSheet();
 }
 async function openTripForm() {
   const t = tripInputs();
   const name = (document.getElementById('apprName').value || '').trim();
-  if (!t.start) { setTripMsg('출장 시작일을 입력하세요.', 'err'); return; }
-  if (!t.dest) { setTripMsg('목적지를 입력하세요.', 'err'); return; }
-  if (!name) { setTripMsg('이름(지급처)을 위 지출결의서 칸에 입력하세요.', 'err'); return; }
-  if (t.mode === 'car' && !t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없어요 — 거리·톨비·숙박·식대 중 하나는 있어야 해요.', 'err'); return; }
+  if (!t.start) { setTripMsg('출장 시작일을 입력해주십시오.', 'err'); return; }
+  if (!t.dest) { setTripMsg('목적지를 입력해주십시오.', 'err'); return; }
+  if (!name) { setTripMsg('이름(지급처)을 위 지출결의서 칸에 입력해주십시오.', 'err'); return; }
+  if (t.mode === 'car' && !t.km && !t.toll && !t.lodging && !t.meals) { setTripMsg('채울 비용이 없습니다 — 거리·톨비·숙박·식대 중 하나를 입력해주십시오.', 'err'); return; }
   if (tripPayday == null) await lookupTripPayday();
   if (t.km && state && state.settings) {   // 목적지별 왕복 km 기억
     const km = Object.assign({}, tripSettings().km); km[t.dest] = t.km;
@@ -2985,7 +2985,7 @@ async function openTripForm() {
                     project: (pj.code || pj.keyword) ? { code: pj.code, name: pj.name, keyword: pj.keyword } : null,
                     start: t.start, end: t.end, dest: t.dest, mode: t.mode, km: t.km, rate: t.rate, toll: t.toll, lodging: t.lodging,
                     fare: t.fare, meals: t.meals, mealCap: t.mealCap };
-  setApprBusy(true); setTripMsg('출장 폼 여는 중… 열리면 캡처 첨부와 검토·제출을 이어서 해 주세요.');
+  setApprBusy(true); setTripMsg('출장 폼 여는 중… 열리면 캡처 첨부와 검토·제출을 진행해주십시오.');
   let res = null;
   try {
     if (apiReady('approval_prefill')) res = await pywebview.api.approval_prefill(payload);
@@ -2993,9 +2993,9 @@ async function openTripForm() {
   } catch (e) { res = { status: 'error', message: String(e) }; }
   setApprBusy(false);
   if (!res) { setTripMsg('실패', 'err'); return; }
-  if (res.status === 'login_required') setTripMsg('EHR 로그인이 필요해요 — 사이드바 ‘로그인’ 후 다시.', 'err');
-  else if (res.status === 'started') setTripMsg((res.message || '출장 결재 창을 열었어요.') + ' 식대·행이 채워지면 캡처 첨부와 검토 후 제출해 주세요. 창에서 카드내역을 더 넣어도 식대 적요·상한이 적용돼요.', 'ok');
-  else if (res.status === 'ok') setTripMsg('폼 창을 닫았어요.', 'ok');
+  if (res.status === 'login_required') setTripMsg('EHR 로그인이 필요합니다 — 사이드바 ‘로그인’ 후 다시 시도해주십시오.', 'err');
+  else if (res.status === 'started') setTripMsg((res.message || '출장 결재 창을 열었습니다.') + ' 식대·행이 채워지면 캡처를 첨부하고 검토 후 제출해주십시오. 창에서 카드내역을 더 넣어도 식대 적요·상한이 적용됩니다.', 'ok');
+  else if (res.status === 'ok') setTripMsg('폼 창을 닫았습니다.', 'ok');
   else setTripMsg('실패: ' + (res.message || '알 수 없음'), 'err');
 }
 

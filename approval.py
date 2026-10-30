@@ -453,13 +453,14 @@ _ROW_FILL_JS = r"""
 
 # 카드내역으로 들어온 행(corp_card_row) 중 아직 처리하지 않은 것(data-wt-meal 없음)에:
 #  - 기본적요가 비었으면 식대 적요(6075) data-* 와 표시값
-#  - 상세내용이 비었으면 승인시간으로 '출장외근비 - 아침/점심/저녁식대' (11시 전 아침, 16시 전 점심, 그 뒤 저녁)
+#  - 상세내용이 비었으면 승인시간으로 '출장외근비 - 아침/점심/저녁식대' (10:30 전 아침, 15:30 전 점심, 그 뒤 저녁)
 #  - 합계가 상한(cap)을 넘으면 공급가액을 상한으로 바꾸고 change 를 쏜다 → 폼이 부가세 0 · 법인카드(비과세)로 정리
 _MEAL_ROWS_JS = r"""
 (x) => {
   let n = 0, capped = 0; const a = x.acct, cap = Number(x.cap) || 0;
   const num = s => Number(String(s || '').replace(/[^\d.-]/g, '')) || 0;
-  const mealOf = t => { const h = parseInt(String(t || '').split(':')[0], 10); if (isNaN(h)) return '식대'; return h < 11 ? '아침식대' : (h < 16 ? '점심식대' : '저녁식대'); };
+  const mealOf = t => { const p = String(t || '').split(':'); const h = parseInt(p[0], 10), m = parseInt(p[1], 10) || 0; if (isNaN(h)) return '식대';
+    const mins = h * 60 + m; return mins < 10 * 60 + 30 ? '아침식대' : (mins < 15 * 60 + 30 ? '점심식대' : '저녁식대'); };
   document.querySelectorAll('#slipBplTable tr.debitTr.corp_card_row').forEach(tr1 => {
     if (tr1.getAttribute('data-wt-meal')) return;
     const tr2 = tr1.nextElementSibling, tr3 = tr2 && tr2.nextElementSibling;

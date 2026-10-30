@@ -318,7 +318,7 @@ class WorkTimeUI(unittest.TestCase):
             bus_history: async () => ({status: 'ok', kinds: {wd: {days, cover: [[54000, 64800]], routes: {R100: [
               {at: 57780, lo: 57660, hi: 57960, n: days}, {at: 59460, lo: 59340, hi: 59640, n: days}]}}}}),
           }};
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'gbis:1', stationId: '1', name: '텔레칩스', no: '05341', lat: 37.4, lng: 127.08, source: 'gbis'});
           saveBusPreview();
           await loadBusHistory();
@@ -359,10 +359,10 @@ class WorkTimeUI(unittest.TestCase):
             bus_arrivals: async () => { window.arrivalCalls++; return {status: 'ok', arrivals: []}; },
           }};
           busDefaultKey = true;
-          document.getElementById('busBtn').click();
+          document.querySelector('#sideNav .navitem[data-view="bus"]').click();
           await previewBusStop({id: 'gbis:1', stationId: '1', name: '텔레칩스', no: '05341', lat: 37.4, lng: 127.08, source: 'gbis'});
           saveBusPreview();
-          document.getElementById('workBtn').click();                 // 버스 화면을 떠난다
+          document.querySelector('#sideNav .navitem[data-view="work"]').click();   // 버스 화면을 떠난다
         }""")
         need = self.page.evaluate("(ti => busNeedSec(ti.mondayKey, ti.dayKey))(todayInfo())")
         self.assertEqual(need, 16 * 3600 + 49 * 60)
